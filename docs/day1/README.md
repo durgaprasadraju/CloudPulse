@@ -2,59 +2,68 @@
 
 **Date:** Day 1 (foundation sprint)  
 **Author:** Durga Prasad Raju Nadimpalli  
-**Status:** Scaffold complete — ready for Phase 2 (gRPC, real ingestion, Vercel/AWS deploy)
+**Commit:** `a4ba10c` — `chore(infra): scaffold CloudPulse monorepo for Day 1`  
+**Status:** Monorepo scaffold committed — `platform/config` and `api-gateway` still required before `docker compose up --build` succeeds
 
-This document records everything built on Day 1: the heartbeat prototype, networking layer, first microservices, micro-frontends, monorepo layout, infrastructure stubs, and governance tooling. It is the onboarding guide for anyone joining the project.
+This document records what is **actually in the repository** after Day 1: the microservices pipeline skeleton, Next.js web shell, Docker Compose stack, infrastructure stubs, and governance docs. It replaces the earlier aspirational draft that listed components not yet committed.
 
 ---
 
 ## 1. Executive summary
 
-Day 1 established CloudPulse as an **observability platform** with:
+Day 1 pivoted CloudPulse from a **Gin monolith + Vite SPA** (`backend/`, `frontend/`) to a **microservices monorepo** aligned with [ADR-001](../adr/ADR-001-microservices-and-database-strategy.md).
 
-1. A working **heartbeat** (`GET /api/ping`) that checks URL uptime and latency.
-2. **Environment-aware networking** (localhost dev vs `cloudpulse.live` production).
-3. A **microservices topology** aligned to bounded contexts: ingest → analyze → correlate → notify, behind an API gateway.
-4. **Repository pattern** for database flexibility (PostgreSQL / MongoDB).
-5. **Micro-frontends** (Vite Module Federation) and a **Next.js** web shell for Vercel.
-6. **Docker Compose** with Postgres, Redis, Prometheus, and Grafana.
-7. **ADR-001**, conventional commits, and CI workflow.
+### What was delivered (in repo)
 
-Day 1 code is intentionally **scaffold-first**: health endpoints, config patterns, and interfaces are real; gRPC wiring, production auth, and full CRUD are Phase 2.
+| Area | Day 1 deliverable |
+|------|-------------------|
+| **Pipeline services** | Four Go health servers: `collector`, `analyzer`, `correlator`, `notifier` |
+| **Web** | Next.js 15 app in `web/` (replaces legacy Vite `frontend/`) |
+| **Local infra** | `docker-compose.yml` — Postgres, Redis, Prometheus, Grafana |
+| **IaC stubs** | Terraform, Ansible, Helm chart skeleton under `infra/` |
+| **Governance** | ADR-001, commit conventions (`docs/COMMITS.md`), GitHub setup guide |
+| **Tooling** | Root `package.json` with commitlint devDependencies; `go.work` workspace |
+
+### What is referenced but not yet in repo
+
+| Path | Referenced by | Phase 2 action |
+|------|---------------|----------------|
+| `platform/config/` | All service `main.go`, Dockerfiles, `go.work` | Add shared env + CORS loader |
+| `services/api-gateway/` | `docker-compose.yml`, `go.work`, Helm, Prometheus | HTTP edge, JWT, `/api/ping` |
+| `.commitlintrc.json`, `.husky/` | `package.json`, `docs/COMMITS.md` | Wire conventional commits |
+| `.github/workflows/ci.yml` | — | Build services + web on push |
+| `proto/`, `packages/types/` | ADR-001 target design | gRPC contracts + shared TS types |
+
+### What was removed in Day 1 commit
+
+The prior architecture commit (`c815d52`) contained `backend/` (Chi/Gin API) and `frontend/` (Vite + Tailwind dashboard). Both were **deleted** when the monorepo scaffold landed. Their behavior is summarized in [§9 Legacy architecture](#9-legacy-architecture-pre-day-1-monorepo).
 
 ---
 
 ## 2. Architecture diagrams
 
-### 2.1 High-level system (target state)
+### 2.1 Current repository layout (Day 1 committed)
 
 ```mermaid
 flowchart TB
     subgraph Clients
-        WEB["web/ — Next.js<br/>app.cloudpulse.live"]
-        MFE_SHELL["apps/shell — Host MFE<br/>:5173"]
-        MFE_DASH["apps/dashboard-mfe<br/>:5174"]
-        MFE_MGR["apps/manager-mfe<br/>:5175"]
-        LEGACY_FE["frontend/ — Vite SPA<br/>:5173 legacy"]
+        WEB["web/ — Next.js<br/>:3000"]
     end
 
-    subgraph Edge
-        GW["api-gateway :8080<br/>JWT · CORS · HTTP"]
+    subgraph Edge["Edge — not in repo yet"]
+        GW["api-gateway :8080<br/>planned"]
     end
 
-    subgraph Services["services/ — Go microservices"]
-        COL["collector :8081<br/>Ingestion & checks"]
-        ANA["analyzer :8082<br/>Rollups & SLOs"]
-        COR["correlator :8083<br/>Incident graphs"]
-        NOT["notifier :8084<br/>Alerts"]
-        PING["pinger-engine<br/>Goroutine workers"]
-        MON["monitor-service<br/>Monitor CRUD + Repository"]
+    subgraph Services["services/ — committed"]
+        COL["collector :8081<br/>GET /health"]
+        ANA["analyzer :8082<br/>GET /health"]
+        COR["correlator :8083<br/>GET /health"]
+        NOT["notifier :8084<br/>GET /health"]
     end
 
-    subgraph Data
-        PG[(PostgreSQL<br/>schema-per-service)]
-        REDIS[(Redis<br/>queues / pub-sub)]
-        MONGO[(MongoDB<br/>optional telemetry)]
+    subgraph Data["docker-compose.yml"]
+        PG[(PostgreSQL :5432<br/>schema-per-service init)]
+        REDIS[(Redis :6379<br/>DB 0–3 per service)]
     end
 
     subgraph Observability
@@ -62,15 +71,8 @@ flowchart TB
         GRAF[Grafana :3001]
     end
 
-    WEB --> GW
-    MFE_SHELL --> GW
-    MFE_DASH --> GW
-    MFE_MGR --> GW
-    LEGACY_FE --> GW
-
-    GW -->|gRPC planned| COL
-    GW -->|gRPC planned| MON
-    GW -->|gRPC planned| PING
+    WEB -.->|NEXT_PUBLIC_API_URL| GW
+    GW -.->|planned| COL
 
     COL --> PG
     COL --> REDIS
@@ -79,66 +81,29 @@ flowchart TB
     COR --> PG
     COR --> REDIS
     NOT --> REDIS
-    MON --> PG
-    MON --> MONGO
 
-    COL -.->|events| ANA
-    ANA -.->|events| COR
-    COR -.->|events| NOT
+    COL -.->|events planned| ANA
+    ANA -.->|events planned| COR
+    COR -.->|events planned| NOT
 
     PROM --> GW & COL & ANA & COR & NOT
     GRAF --> PROM
 ```
 
-### 2.2 Day 1 data flow — heartbeat
+Solid boxes = committed code. Dashed boxes = planned or referenced but missing from the tree.
+
+### 2.2 Target pipeline (ADR-001)
 
 ```mermaid
-sequenceDiagram
-    participant UI as React / Next.js
-    participant GW as api-gateway
-    participant PE as pinger-engine
-    participant URL as Target URL e.g. google.com
-
-    UI->>GW: GET /api/ping (CORS preflight if cross-origin)
-    Note over GW: Day 1 stub returns JSON<br/>Phase 2: gRPC to pinger-engine
-    GW-->>UI: {"site","status","latency"}
-
-    Note over PE: Background worker pool<br/>already pings URLs via goroutines
-    PE->>URL: HTTP GET
-    URL-->>PE: 200 OK
-    PE->>PE: Log result + latency
+flowchart LR
+    IN[Ingestion] --> AN[Analysis] --> CO[Correlation] --> NO[Notification]
+    COL2[collector] --> AN2[analyzer] --> COR2[correlator] --> NOT2[notifier]
+    GW2[api-gateway] --> COL2
 ```
 
-### 2.3 Repository pattern (monitor-service)
+Day 1 implements **health endpoints only** on the four pipeline services. Event flow via Redis is configured in Compose env vars but not implemented in Go code yet.
 
-```mermaid
-classDiagram
-    class MonitorStore {
-        <<interface>>
-        +Create(ctx, monitor)
-        +GetByID(ctx, id)
-        +List(ctx, opts)
-        +Update(ctx, monitor)
-        +Delete(ctx, id)
-        +Ping(ctx)
-        +Close()
-    }
-    class PostgresStore {
-        GORM + PostgreSQL
-    }
-    class MongoStore {
-        MongoDB driver
-    }
-    class NewMonitorStore {
-        reads DB_TYPE env
-    }
-
-    MonitorStore <|.. PostgresStore
-    MonitorStore <|.. MongoStore
-    NewMonitorStore --> MonitorStore
-```
-
-### 2.4 Deployment topology (local Day 1)
+### 2.3 Local Docker Compose topology
 
 ```mermaid
 flowchart LR
@@ -147,34 +112,60 @@ flowchart LR
         RD[(Redis :6379)]
         PR[Prometheus :9090]
         GF[Grafana :3001]
-        SVC[5 Go services<br/>8080-8084]
+        GW2[api-gateway :8080]
+        SVC[4 Go services<br/>8081–8084]
     end
 
-    DEV[Developer laptop] --> SVC
-    DEV --> GF
+    DEV[Developer laptop] --> GF
+    DEV --> GW2
+    DEV --> SVC
     SVC --> PG
     SVC --> RD
-    PR --> SVC
+    PR --> GW2 & SVC
 ```
 
 ---
 
-## 3. Repository layout (Day 1)
+## 3. Repository layout (actual tree)
 
-| Path | Day 1 status | Purpose |
-|------|--------------|---------|
-| `services/` | **Primary** | Go microservices (`go.work`) |
-| `web/` | **Created** | Next.js app for Vercel (`app.cloudpulse.live`) |
-| `infra/` | **Stubs** | Terraform, Ansible, Helm, Docker assets |
-| `docs/` | **Created** | ADRs, Day 1 log, GitHub setup |
-| `platform/config/` | **Designed** | Shared Go env + CORS (referenced by services) |
-| `packages/types/` | **Designed** | Shared TypeScript `Monitor`, `PingResult` |
-| `proto/` | **Designed** | gRPC contracts for monitor & pinger |
-| `backend/` | **Legacy** | Original Gin monolith (`/api/ping`) |
-| `frontend/` | **Legacy** | Original Vite + Tailwind dashboard |
-| `apps/` | **Legacy MFE** | Shell + dashboard + manager (Module Federation) |
+```
+CloudPulse/
+├── docker-compose.yml          # Postgres, Redis, Prometheus, Grafana + 5 Go services
+├── go.work                     # Links platform/config + 5 service modules
+├── package.json                # commitlint devDependencies (root)
+├── services/
+│   ├── collector/              # ✅ committed — health server :8081
+│   ├── analyzer/               # ✅ committed — health server :8082
+│   ├── correlator/             # ✅ committed — health server :8083
+│   ├── notifier/               # ✅ committed — health server :8084
+│   └── api-gateway/            # ❌ missing — referenced by compose & go.work
+├── web/                        # ✅ Next.js 15 app
+├── infra/
+│   ├── docker/                 # Dockerfile template, Postgres init, Prometheus, Grafana
+│   ├── terraform/              # AWS provider stub
+│   ├── ansible/                # Docker bootstrap stub
+│   └── helm/cloudpulse/        # Chart + api-gateway Deployment template
+└── docs/
+    ├── day1/README.md          # this file
+    ├── adr/ADR-001-*.md
+    ├── COMMITS.md
+    └── GITHUB_SETUP.md
+```
 
-> **Note:** The Day 1 git commit includes the monorepo scaffold (`collector`, `analyzer`, `correlator`, `notifier`, `web`, `infra`). Legacy paths (`backend/`, `frontend/`, `apps/`, `api-gateway`, `platform/`) were built in the same sprint and should be merged into the repo on the next commit.
+| Path | Status | Purpose |
+|------|--------|---------|
+| `services/collector` | **Committed** | Ingestion service scaffold; `GET /health` |
+| `services/analyzer` | **Committed** | Analysis service scaffold; `GET /health` |
+| `services/correlator` | **Committed** | Correlation service scaffold; `GET /health` |
+| `services/notifier` | **Committed** | Notification service scaffold; `GET /health` |
+| `services/api-gateway` | **Missing** | HTTP edge — required by Compose |
+| `platform/config` | **Missing** | Shared Go env loader — required by all services |
+| `web/` | **Committed** | Next.js shell for Vercel (`app.cloudpulse.live` target) |
+| `infra/` | **Committed** | Terraform, Ansible, Helm, Docker assets (stubs) |
+| `backend/` | **Removed** | Former Gin/Chi monolith (see §9) |
+| `frontend/` | **Removed** | Former Vite SPA (see §9) |
+| `apps/` | **Never committed** | Module Federation MFEs — Phase 2 |
+| `proto/`, `packages/` | **Never committed** | gRPC + shared TS types — Phase 2 |
 
 ---
 
@@ -182,266 +173,275 @@ flowchart LR
 
 ### 4.1 Go microservices (`services/`)
 
-| Service | Port | Day 1 implementation | Future use |
-|---------|------|------------------------|------------|
-| **api-gateway** | 8080 | Gin HTTP server, CORS from `platform/config`, JWT middleware, `GET /health`, `GET /api/ping` (stub), protected `GET /api/monitors` (501) | Single public edge on AWS ALB; routes to internal gRPC; rate limiting; API keys |
-| **collector** | 8081 | Health server; loads global config; env for Postgres + Redis | Schedule URL/metric ingestion; publish raw events to Redis; persist cursors in `collector` schema |
-| **analyzer** | 8082 | Health server | Consume collector events; compute rollups, SLO breaches; write to `analyzer` schema |
-| **correlator** | 8083 | Health server | Build incident graphs from analyzer signals; dedupe alerts |
-| **notifier** | 8084 | Health server | Deliver Slack/email/webhooks; outbox pattern via Redis |
-| **monitor-service** | 8081* | `MonitorStore` interface; GORM Postgres + Mongo implementations; `DB_TYPE` runtime switch | CRUD for monitors; gRPC server per `proto/monitor/v1` |
-| **pinger-engine** | — | Goroutine worker pool (`worker.Pool`); demo Google ping | High-concurrency checks; fed by Redis queue; gRPC per `proto/pinger/v1` |
+All four committed services share the same Day 1 pattern:
 
-\*Port conflict with collector in target architecture — **Phase 2** will merge monitor CRUD into collector or reassign ports.
+- Import `github.com/durgaprasadraju/CloudPulse/platform/config` (module not in repo)
+- Load global config via `platformcfg.Load()`
+- Expose `GET /health` returning JSON `{"status":"ok","service":"<name>"}`
+- Listen on `PORT` env (defaults 8081–8084)
+- Multi-stage Alpine Dockerfile copying `platform/config` + service module
 
-**Key files (api-gateway):**
+| Service | Port | Env vars (Compose) | Day 1 code | Future role |
+|---------|------|--------------------|------------|-------------|
+| **collector** | 8081 | `DATABASE_URL`, `REDIS_URL` (db 0) | Health only | URL/metric ingestion; publish events to Redis |
+| **analyzer** | 8082 | `DATABASE_URL`, `REDIS_URL` (db 1) | Health only | Consume collector events; SLO rollups |
+| **correlator** | 8083 | `DATABASE_URL`, `REDIS_URL` (db 2) | Health only | Incident graphs; dedupe alerts |
+| **notifier** | 8084 | `REDIS_URL` (db 3), SMTP/Slack placeholders | Health only | Slack/email/webhooks; outbox via Redis |
+| **api-gateway** | 8080 | `ALLOWED_ORIGINS`, `PUBLIC_*` URLs | **Not in repo** | JWT, CORS, `/api/ping`, route to gRPC |
 
-| File | Purpose |
-|------|---------|
-| `cmd/api-gateway/main.go` | HTTP routes, CORS, server bootstrap |
-| `internal/middleware/jwt.go` | Bearer JWT validation for `/api/*` |
-| `Dockerfile` | Multi-stage Go build |
-| `.env.example` | `JWT_SECRET`, gRPC upstream URLs, CORS |
-
-**Key files (monitor-service — Repository pattern):**
+**Key files per service (identical structure):**
 
 | File | Purpose |
 |------|---------|
-| `internal/store/repository.go` | `MonitorStore` interface + `NewMonitorStore()` factory |
-| `internal/store/postgres_store.go` | GORM implementation, auto-migrate |
-| `internal/store/mongo_store.go` | MongoDB driver implementation |
-| `internal/models/monitor.go` | Domain entity (`Monitor`, `MonitorStatus`) |
-| `internal/store/errors.go` | `ErrNotFound` |
-
-**Key files (pinger-engine):**
-
-| File | Purpose |
-|------|---------|
-| `internal/worker/pool.go` | Bounded goroutine pool, job queue, HTTP check runner |
-| `cmd/pinger-engine/main.go` | Starts pool, demo job to `https://google.com` |
-
----
-
-### 4.2 Shared platform (`platform/config`)
-
-| Concern | Day 1 behavior | Future use |
-|---------|----------------|------------|
-| `ENV` | `dev` / `prod` | Feature flags, log levels |
-| `ALLOWED_ORIGINS` | Whitelist for CORS | Vercel previews, subdomains |
-| `PUBLIC_API_URL` | `localhost:8080` or `api.cloudpulse.live` | Service discovery docs |
-| `PUBLIC_APP_URL` | `localhost:3000` or `app.cloudpulse.live` | Redirect URIs, email links |
-
-Loaded via `godotenv` + `os.Getenv` in every Go service.
-
----
-
-### 4.3 Legacy monolith (`backend/`)
-
-Built first on Day 1 to prove the heartbeat quickly.
-
-| File | Purpose |
-|------|---------|
-| `main.go` | Gin server, `GET /api/ping`, real `net/http` check to Google |
-| `internal/config/config.go` | `PORT`, `ENV`, `ALLOWED_ORIGINS` via godotenv |
-| `internal/server/server.go` | Chi router variant (alternate entry) |
-| `internal/handler/health.go` | Health JSON responses |
+| `cmd/<service>/main.go` | HTTP server, `/health` handler |
+| `go.mod` | Module path + `replace` to `../../platform/config` |
+| `Dockerfile` | Multi-stage build (Go 1.22 builder → Alpine 3.20) |
 | `.env.example` | Local env template |
 
-**Future:** Deprecated once api-gateway + pinger-engine gRPC path is complete. Keep for local smoke tests during migration.
+**Example — collector health handler:**
+
+```go
+mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    _, _ = w.Write([]byte(`{"status":"ok","service":"collector"}`))
+})
+```
+
+**Dependency chain in Compose:** `postgres` + `redis` → `api-gateway` + `collector` → `analyzer` → `correlator` → `notifier`.
 
 ---
 
-### 4.4 Frontends
+### 4.2 Next.js web (`web/`)
 
-#### A. Legacy Vite SPA (`frontend/`)
+Replaces the removed Vite `frontend/`. Minimal landing page with a link to the API heartbeat endpoint.
 
 | File | Purpose |
 |------|---------|
-| `src/App.tsx` | Fetches `API_BASE_URL/api/ping`, displays JSON |
-| `src/config/api.ts` | `VITE_API_BASE_URL` constant |
-| `.env.development` | `http://localhost:8080` |
-| `.env.production` | `https://api.cloudpulse.live` |
-| `vite.config.ts` | Dev proxy `/api` → `:8080` |
+| `app/page.tsx` | Home page; displays `NEXT_PUBLIC_API_URL`; link to `/api/ping` |
+| `app/layout.tsx` | Root layout, metadata (`CloudPulse`) |
+| `next.config.ts` | Exposes `NEXT_PUBLIC_API_URL` (default `http://localhost:8080`) |
+| `.env.development` | `NEXT_PUBLIC_API_URL=http://localhost:8080` |
+| `.env.production` | `NEXT_PUBLIC_API_URL=https://api.cloudpulse.live` |
+| `.env.example` | Same as development default |
+| `package.json` | Next 15, React 19, TypeScript 5 |
 
-**Future:** Retire after `web/` reaches feature parity.
+**Run locally:**
 
-#### B. Micro-frontends (`apps/`)
+```bash
+cd web && npm install && npm run dev   # http://localhost:3000
+```
 
-| App | Port | Exposes / consumes | Future use |
-|-----|------|-------------------|------------|
-| **shell** | 5173 | Host; loads remotes | Auth shell, sidebar, layout on Vercel |
-| **dashboard-mfe** | 5174 | Exposes `./App` — ping charts | Real-time latency charts, Grafana embeds |
-| **manager-mfe** | 5175 | Exposes `./App` — monitor list | CRUD, Excel import |
+The heartbeat link targets `api-gateway` (`/api/ping`), which is not implemented until `services/api-gateway` is added.
 
-Configured with `@originjs/vite-plugin-federation` in each `vite.config.ts`.
+---
 
-#### C. Next.js (`web/`)
+### 4.3 Infrastructure (`infra/`)
+
+| Component | Path | Day 1 contents |
+|-----------|------|----------------|
+| **Go service template** | `docker/Dockerfile.go-service` | Multi-stage build with `ARG SERVICE`; copies `platform/config` |
+| **Postgres init** | `docker/init-db/01_schemas.sql` | Extensions + schemas: `collector`, `analyzer`, `correlator`, `gateway` |
+| **Prometheus** | `docker/prometheus/prometheus.yml` | Scrapes `api-gateway:8080` and services `:8081–8084` |
+| **Grafana** | `docker/grafana/provisioning/datasources/prometheus.yml` | Prometheus datasource |
+| **Terraform** | `terraform/main.tf` | AWS provider stub; output placeholder |
+| **Terraform vars** | `terraform/variables.tf` | `aws_region`, `environment` |
+| **Ansible** | `ansible/playbook.yml` | Docker package + compose deploy placeholder |
+| **Helm** | `helm/cloudpulse/` | Chart v0.1.0; values for all 5 services; api-gateway Deployment template |
+
+---
+
+### 4.4 Root orchestration
 
 | File | Purpose |
 |------|---------|
-| `app/page.tsx` | Landing + link to `/api/ping` |
-| `app/layout.tsx` | Root layout, metadata |
-| `next.config.ts` | `NEXT_PUBLIC_API_URL` |
-| `.env.production` | `https://api.cloudpulse.live` |
+| `docker-compose.yml` | Postgres 16, Redis 7, Prometheus, Grafana + api-gateway + 4 pipeline services |
+| `go.work` | Go 1.25 workspace: `platform/config`, `api-gateway`, collector, analyzer, correlator, notifier |
+| `package.json` | Root commitlint scripts (`commitlint`, `commitlint:last`) |
 
-**Future:** Primary production UI on Vercel at `app.cloudpulse.live`.
+**Not present (despite earlier docs or commit message references):**
 
----
-
-### 4.5 Shared types (`packages/types`)
-
-| Type | Fields | Used by |
-|------|--------|---------|
-| `Monitor` | id, name, url, intervalSeconds, status | manager-mfe, future API clients |
-| `PingResult` | site, status, latency | dashboard-mfe, shell |
-| `CreateMonitorInput` / `UpdateMonitorInput` | CRUD DTOs | manager-mfe forms |
-
-**Future:** Publish as internal npm package; OpenAPI codegen alignment.
+- `.commitlintrc.json`, `.husky/commit-msg`
+- `.github/workflows/ci.yml`
+- Root `.env.example`, `.gitignore`
 
 ---
 
-### 4.6 gRPC contracts (`proto/`)
+## 5. Networking & environment
 
-| Proto | Service | Day 1 status |
-|-------|---------|--------------|
-| `monitor/v1/monitor.proto` | `MonitorService` CRUD | Defined, not generated |
-| `pinger/v1/pinger.proto` | `PingerService.RunCheck` | Defined, not generated |
+### 5.1 URL map
 
-**Future:** `buf generate` → `gen/`; internal only (not exposed to browser).
+| Environment | Web origin | API base (`NEXT_PUBLIC_API_URL`) |
+|-------------|------------|----------------------------------|
+| **Development** | `http://localhost:3000` | `http://localhost:8080` |
+| **Production** | `https://app.cloudpulse.live` (target) | `https://api.cloudpulse.live` |
 
----
+Compose sets `ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173` on api-gateway (when added).
 
-### 4.7 Infrastructure (`infra/`)
+### 5.2 Service environment variables
 
-| Component | Path | Day 1 contents | Future use |
-|-----------|------|----------------|------------|
-| **Docker template** | `docker/Dockerfile.go-service` | Multi-stage ARG `SERVICE` | CI image matrix |
-| **Postgres init** | `docker/init-db/01_schemas.sql` | `collector`, `analyzer`, `correlator`, `gateway` schemas | Schema-per-service dev |
-| **Prometheus** | `docker/prometheus/prometheus.yml` | Scrape all services :8080-8084 | SLO alerting rules |
-| **Grafana** | `docker/grafana/provisioning/` | Prometheus datasource | Dashboards per service |
-| **Terraform** | `terraform/main.tf` | AWS provider stub | EKS, RDS, ElastiCache |
-| **Ansible** | `ansible/playbook.yml` | Docker bootstrap stub | VM deployments |
-| **Helm** | `helm/cloudpulse/` | Chart + api-gateway Deployment | EKS releases |
+| Service | Key variables |
+|---------|---------------|
+| All | `ENV=dev`, `PORT` |
+| collector | `DATABASE_URL`, `REDIS_URL=redis://redis:6379/0` |
+| analyzer | `DATABASE_URL`, `REDIS_URL=redis://redis:6379/1` |
+| correlator | `DATABASE_URL`, `REDIS_URL=redis://redis:6379/2` |
+| notifier | `REDIS_URL=redis://redis:6379/3`, `SMTP_*`, `SLACK_WEBHOOK_URL` |
+| api-gateway (planned) | `ALLOWED_ORIGINS`, `PUBLIC_API_URL`, `PUBLIC_APP_URL`, `JWT_SECRET` |
 
----
+### 5.3 Postgres (dev)
 
-### 4.8 Root orchestration
-
-| File | Purpose |
-|------|---------|
-| `docker-compose.yml` | Postgres, Redis, Prometheus, Grafana + 5 Go services |
-| `go.work` | Go workspace linking all service modules |
-| `.commitlintrc.json` | Conventional commits enforcement |
-| `.github/workflows/ci.yml` | Build all services + web; commitlint |
-| `.env.example` | Root secrets template (never commit `.env`) |
-
----
-
-## 5. Networking & CORS (Day 1 decision)
-
-| Environment | Frontend origin | API base |
-|-------------|-----------------|----------|
-| **Development** | `http://localhost:5173`, `:5174`, `:5175`, `:3000` | `http://localhost:8080` |
-| **Production** | `https://app.cloudpulse.live` (+ MFE subdomains) | `https://api.cloudpulse.live` |
-
-**Why whitelist, not `*`:** Browsers enforce same-origin policy. The API returns `Access-Control-Allow-Origin` only for known frontends. This blocks random sites from calling your API with user cookies and is required when `AllowCredentials: true`.
-
-**Vite rule:** Only `VITE_*` / `NEXT_PUBLIC_*` vars are exposed to the browser — never put AWS secrets there.
+- User / password / database: `CloudPulse`
+- Port: `5432`
+- Schemas created on first boot via `infra/docker/init-db/01_schemas.sql`
 
 ---
 
 ## 6. Database strategy (ADR-001 summary)
 
-See full record: [ADR-001](../adr/ADR-001-microservices-and-database-strategy.md).
+See [ADR-001](../adr/ADR-001-microservices-and-database-strategy.md).
 
 | Decision | Choice |
 |----------|--------|
 | Topology | Microservices over monolith |
-| Primary DB | PostgreSQL, schema-per-service (dev), DB-per-service (prod) |
-| Queue | Redis between pipeline stages |
-| Optional store | MongoDB via `DB_TYPE=mongo` in monitor-service |
-| Pattern | Repository interface — swap stores without changing handlers |
+| Primary DB | PostgreSQL — schema-per-service in dev |
+| Queue | Redis between pipeline stages (env wired; consumers not implemented) |
+| Pattern | Repository interface planned per service — not yet in Day 1 code |
+
+| Service | Dev schema | Day 1 DB usage |
+|---------|------------|----------------|
+| collector | `collector` | Env set; no migrations yet |
+| analyzer | `analyzer` | Env set; no migrations yet |
+| correlator | `correlator` | Env set; no migrations yet |
+| api-gateway | `gateway` | Schema created; service missing |
+| notifier | — | Redis only in Compose |
 
 ---
 
-## 7. What works on Day 1 vs Phase 2
+## 7. What works vs what is blocked
 
-| Capability | Day 1 | Phase 2 |
-|------------|-------|---------|
-| `GET /api/ping` | ✅ (gateway stub or legacy Gin real ping) | Wire to pinger-engine gRPC |
-| Monitor CRUD | Interface + stores only | gRPC + REST via gateway |
-| JWT auth | Middleware exists | Real issuer, refresh tokens |
-| Micro-frontends | Federation config | Deploy remotes to Vercel subdomains |
-| Prometheus/Grafana | Containers + config | Custom dashboards, alert rules |
-| Terraform/Helm | Stubs | AWS EKS + RDS modules |
-| Excel import | manager-mfe placeholder | Parse + bulk `CreateMonitor` |
+| Capability | Day 1 (repo) | Blocker / next step |
+|------------|--------------|---------------------|
+| `GET /health` on pipeline services | Code written | Needs `platform/config` module to build |
+| `docker compose up --build` | Compose file ready | Missing `api-gateway` + `platform/config` |
+| `GET /api/ping` | Not implemented | Add `api-gateway` or temporary stub |
+| Monitor CRUD | Not started | Repository pattern in Phase 2 |
+| JWT auth | Not started | api-gateway middleware |
+| Prometheus/Grafana | Containers + scrape config | Services must be running |
+| Terraform / Helm | Stubs only | AWS EKS + RDS modules |
+| Conventional commits | `package.json` deps only | Add `.commitlintrc.json` + husky |
+| CI | Not present | Add `.github/workflows/ci.yml` |
 
 ---
 
-## 8. How to run Day 1 stack
+## 8. How to run
+
+### Prerequisites
+
+Add these before the full stack builds:
+
+1. **`platform/config`** — shared Go module with `Load()` returning env, allowed origins, public URLs
+2. **`services/api-gateway`** — HTTP server on `:8080` with at least `/health` and `/api/ping`
+
+### Full stack (after prerequisites)
 
 ```bash
-# Full infrastructure + services
 docker compose up --build
 
-# Endpoints
-# API gateway:  http://localhost:8080/health
-# Ping:         http://localhost:8080/api/ping
+# Endpoints (when all services run)
+# Health:       http://localhost:8081/health  (collector)
+#               http://localhost:8082/health  (analyzer)
+#               http://localhost:8083/health  (correlator)
+#               http://localhost:8084/health  (notifier)
+# API gateway:  http://localhost:8080/health  (when added)
 # Grafana:      http://localhost:3001  (admin / admin)
 # Prometheus:   http://localhost:9090
+```
 
-# Next.js web
+### Web only (works today)
+
+```bash
 cd web && npm install && npm run dev   # http://localhost:3000
+```
 
-# Legacy Vite UI (if present in repo)
-cd frontend && npm install && npm run dev   # http://localhost:5173
+### Go workspace (after `platform/config` exists)
+
+```bash
+go work sync
+cd services/collector && go run ./cmd/collector
 ```
 
 ---
 
-## 9. Day 1 timeline (chronological)
+## 9. Legacy architecture (pre-Day 1 monorepo)
+
+Commit `c815d52` (`chore: initial project architecture`) contained a working monolith stack that Day 1 removed.
+
+### `backend/` (removed)
+
+| File | Purpose |
+|------|---------|
+| `internal/server/server.go` | Chi router, CORS, middleware |
+| `internal/handler/health.go` | Health JSON responses |
+| `internal/config/config.go` | `PORT`, `ENV`, `ALLOWED_ORIGINS` |
+| `pkg/response/response.go` | Shared response helpers |
+
+The Vite frontend called `GET /api/v1/health` (not `/api/ping`).
+
+### `frontend/` (removed → migrated to `web/`)
+
+| File | Purpose |
+|------|---------|
+| `src/App.tsx` | Fetched health API, displayed status |
+| `vite.config.ts` | Dev server + API proxy |
+| Tailwind + ESLint toolchain | Full SPA styling |
+
+Day 1 replaced this with a minimal Next.js page; rich UI returns in Phase 2.
+
+---
+
+## 10. Day 1 timeline
 
 ```mermaid
 timeline
     title CloudPulse Day 1
-    section Foundation
-        Heartbeat API : Gin /api/ping + Google check
-        Vite dashboard : React fetch + JSON display
-    section Networking
-        Env config : godotenv, CORS whitelist
-        API_BASE_URL : .env.development / .production
-    section Microservices v1
-        api-gateway : JWT + CORS edge
-        monitor-service : Repository pattern PG/Mongo
-        pinger-engine : Goroutine worker pool
-        Micro-frontends : shell + dashboard + manager
-    section Monorepo
-        5 services : collector analyzer correlator notifier gateway
-        web/ : Next.js for Vercel
-        infra/ : TF Ansible Helm Docker
-        ADR-001 + CI + conventional commits
+    section Pre-monorepo
+        Initial architecture : backend Chi API + Vite dashboard
+    section Monorepo pivot
+        Remove legacy : Delete backend/ and frontend/
+        Pipeline scaffold : collector analyzer correlator notifier health servers
+        Web migration : frontend/ replaced by web/ Next.js
+        Local infra : docker-compose Postgres Redis Prometheus Grafana
+        IaC stubs : Terraform Ansible Helm Docker templates
+        Governance : ADR-001 docs COMMITS GITHUB_SETUP
+    section Immediate follow-up
+        platform/config : Unblocks Go builds
+        api-gateway : Unblocks Compose and /api/ping
+        CI + commitlint config : Husky and GitHub Actions
 ```
 
 ---
 
-## 10. Related documents
+## 11. Phase 2 recommendations
+
+1. **Commit `platform/config`** — `Load()` with `ENV`, `ALLOWED_ORIGINS`, `PUBLIC_API_URL`, `PUBLIC_APP_URL` via godotenv + `os.Getenv`.
+2. **Commit `services/api-gateway`** — Gin or stdlib HTTP; CORS from platform config; `GET /health`, stub `GET /api/ping`; JWT middleware skeleton.
+3. **Restore CI** — `.github/workflows/ci.yml` building all Go modules + `web/`; `.commitlintrc.json` + husky hook.
+4. **Implement collector → notifier pipeline** — Redis pub/sub or streams between services.
+5. **Add `proto/`** — `buf generate`; wire api-gateway → pinger/collector gRPC.
+6. **Deploy `web/`** to Vercel; api-gateway behind `api.cloudpulse.live` on AWS.
+7. **Reintroduce observability UI** — latency charts, monitor CRUD (port ideas from removed `frontend/`).
+
+---
+
+## 12. Related documents
 
 | Document | Description |
 |----------|-------------|
 | [ADR-001](../adr/ADR-001-microservices-and-database-strategy.md) | Microservices vs monolith, DB strategy |
 | [COMMITS.md](../COMMITS.md) | Conventional commit format |
 | [GITHUB_SETUP.md](../GITHUB_SETUP.md) | Push, branch protection, Vercel |
-| [README.md](../README.md) | Monorepo index |
-
----
-
-## 11. Phase 2 recommendations
-
-1. Restore/commit `platform/config`, `api-gateway`, `monitor-service`, `pinger-engine`, `backend/`, `frontend/`, `apps/` into main branch.
-2. Run `buf generate` on `proto/` and connect api-gateway → pinger-engine for real `/api/ping`.
-3. Implement collector Redis publisher + analyzer consumer.
-4. Deploy `web/` to Vercel; api-gateway to AWS behind `api.cloudpulse.live`.
-5. Add OpenTelemetry traces across the pipeline (collector → notifier).
+| [docs/README.md](../README.md) | Monorepo index |
+| [README.md](../../README.md) | Root quick start |
 
 ---
 
