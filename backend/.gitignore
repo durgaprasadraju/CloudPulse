@@ -1,6 +1,0 @@
-beacon
-beacon.exe
-*.exe
-*.test
-*.out
-vendor/

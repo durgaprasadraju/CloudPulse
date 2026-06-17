@@ -1,0 +1,142 @@
+# Copyright 2026 Durga Prasad Raju Nadimpalli
+# Licensed under the Apache License, Version 2.0
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cloudpulse-postgres
+    environment:
+      POSTGRES_USER: CloudPulse
+      POSTGRES_PASSWORD: CloudPulse
+      POSTGRES_DB: CloudPulse
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/docker/init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U CloudPulse -d CloudPulse"]
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cloudpulse-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: cloudpulse-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: cloudpulse-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: cloudpulse-api-gateway
+    environment:
+      ENV: dev
+      PORT: "8080"
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      PUBLIC_API_URL: http://localhost:8080
+      PUBLIC_APP_URL: http://localhost:3000
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  collector:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    container_name: cloudpulse-collector
+    environment:
+      ENV: dev
+      PORT: "8081"
+      DATABASE_URL: postgres://CloudPulse:CloudPulse@postgres:5432/CloudPulse?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  analyzer:
+    build:
+      context: .
+      dockerfile: services/analyzer/Dockerfile
+    container_name: cloudpulse-analyzer
+    environment:
+      ENV: dev
+      PORT: "8082"
+      DATABASE_URL: postgres://CloudPulse:CloudPulse@postgres:5432/CloudPulse?sslmode=disable
+      REDIS_URL: redis://redis:6379/1
+    ports:
+      - "8082:8082"
+    depends_on:
+      - collector
+
+  correlator:
+    build:
+      context: .
+      dockerfile: services/correlator/Dockerfile
+    container_name: cloudpulse-correlator
+    environment:
+      ENV: dev
+      PORT: "8083"
+      DATABASE_URL: postgres://CloudPulse:CloudPulse@postgres:5432/CloudPulse?sslmode=disable
+      REDIS_URL: redis://redis:6379/2
+    ports:
+      - "8083:8083"
+    depends_on:
+      - analyzer
+
+  notifier:
+    build:
+      context: .
+      dockerfile: services/notifier/Dockerfile
+    container_name: cloudpulse-notifier
+    environment:
+      ENV: dev
+      PORT: "8084"
+      REDIS_URL: redis://redis:6379/3
+    ports:
+      - "8084:8084"
+    depends_on:
+      - correlator
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

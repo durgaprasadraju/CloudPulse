@@ -1,0 +1,20 @@
+# Copyright 2026 Durga Prasad Raju Nadimpalli
+# Licensed under the Apache License, Version 2.0
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: cloudpulse-services
+    static_configs:
+      - targets:
+          - api-gateway:8080
+          - collector:8081
+          - analyzer:8082
+          - correlator:8083
+          - notifier:8084

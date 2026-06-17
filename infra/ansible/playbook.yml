@@ -1,0 +1,16 @@
+# Copyright 2026 Durga Prasad Raju Nadimpalli
+# Licensed under the Apache License, Version 2.0
+---
+- name: CloudPulse stack bootstrap
+  hosts: cloudpulse
+  become: true
+  tasks:
+    - name: Ensure Docker is present
+      ansible.builtin.package:
+        name: docker
+        state: present
+      ignore_errors: true
+
+    - name: Placeholder — deploy compose stack
+      ansible.builtin.debug:
+        msg: "Deploy docker compose from /opt/cloudpulse (stub)"

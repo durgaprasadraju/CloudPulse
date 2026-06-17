@@ -1,0 +1,33 @@
+# Copyright 2026 Durga Prasad Raju Nadimpalli
+# Licensed under the Apache License, Version 2.0
+#
+# Multi-stage Go service image template.
+# Build from repo root:
+#   docker build -f infra/docker/Dockerfile.go-service \
+#     --build-arg SERVICE=collector \
+#     -t cloudpulse/collector:dev .
+
+# syntax=docker/dockerfile:1
+ARG GO_VERSION=1.22
+FROM golang:${GO_VERSION}-alpine AS builder
+
+ARG SERVICE
+WORKDIR /src
+
+RUN apk add --no-cache git ca-certificates
+
+COPY platform/config ./platform/config
+COPY services/${SERVICE} ./services/${SERVICE}
+
+WORKDIR /src/services/${SERVICE}
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app ./cmd/${SERVICE}
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates
+
+COPY --from=builder /app /app
+
+USER nobody
+ENTRYPOINT ["/app"]
