@@ -1,0 +1,16 @@
+# Local secrets / overrides (copy from .env.example)
+.env
+.env.local
+.env.*.local
+
+# Go / Docker build artifacts
+/build/
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Node (web has its own ignore; keep root clean too)
+node_modules/

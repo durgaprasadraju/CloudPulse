@@ -1,7 +1,0 @@
-apiVersion: v2
-name: cloudpulse
-description: CloudPulse observability platform Helm chart
-type: application
-version: 0.1.0
-appVersion: "0.1.0"
-license: Apache-2.0

@@ -1,0 +1,197 @@
+# CloudPulse local prototype stack
+#
+# Start:  docker compose --env-file .env.example up --build
+# (or:    cp .env.example .env && docker compose up --build)
+#
+# URLs:
+#   Map UI (rider/driver):  http://localhost:3000
+#   API Gateway:            http://localhost:8080
+#   RabbitMQ management:    http://localhost:15672  (guest/guest)
+#   Jaeger UI:              http://localhost:16686
+#
+# Note: This ride-sharing codebase uses MongoDB + RabbitMQ today.
+# Redis and PostgreSQL are included for the CloudPulse.live prototype
+# checklist (tracking / driver data) and are ready for you to wire in.
+
+name: cloudpulse
+
+services:
+  # ---------------------------------------------------------------------------
+  # Data stores
+  # ---------------------------------------------------------------------------
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Reserved for real-time tracking prototypes (not used by Go services yet)
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Reserved for driver/profile data prototypes (drivers are in-memory today)
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cloudpulse}
+      POSTGRES_USER: ${POSTGRES_USER:-cloudpulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloudpulse}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cloudpulse} -d ${POSTGRES_DB:-cloudpulse}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+
+  # ---------------------------------------------------------------------------
+  # Go microservices (built from root multi-stage Dockerfile)
+  # ---------------------------------------------------------------------------
+  trip-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: trip-service
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
+      RABBITMQ_URI: ${RABBITMQ_URI:-amqp://guest:guest@rabbitmq:5672/}
+      OSRM_API: ${OSRM_API:-https://router.project-osrm.org}
+      JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    expose:
+      - "9093"
+
+  driver-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: driver-service
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      RABBITMQ_URI: ${RABBITMQ_URI:-amqp://guest:guest@rabbitmq:5672/}
+      JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    expose:
+      - "9092"
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: payment-service
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      RABBITMQ_URI: ${RABBITMQ_URI:-amqp://guest:guest@rabbitmq:5672/}
+      JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_replace_me}
+      STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-http://localhost:3000?payment=success}
+      STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-http://localhost:3000?payment=cancel}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # HTTP + WebSocket entrypoint — published on host port 8080
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: api-gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      HTTP_ADDR: ${HTTP_ADDR:-:8080}
+      RABBITMQ_URI: ${RABBITMQ_URI:-amqp://guest:guest@rabbitmq:5672/}
+      TRIP_SERVICE_URL: ${TRIP_SERVICE_URL:-trip-service:9093}
+      DRIVER_SERVICE_URL: ${DRIVER_SERVICE_URL:-driver-service:9092}
+      JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
+      STRIPE_WEBHOOK_KEY: ${STRIPE_WEBHOOK_KEY:-}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      trip-service:
+        condition: service_started
+      driver-service:
+        condition: service_started
+
+  # ---------------------------------------------------------------------------
+  # React / Next.js frontend — published on host port 3000
+  # ---------------------------------------------------------------------------
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+        NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL:-ws://localhost:8080/ws}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
+
+volumes:
+  mongo_data:
+  redis_data:
+  postgres_data:

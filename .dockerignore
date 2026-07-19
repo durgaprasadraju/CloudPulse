@@ -1,0 +1,16 @@
+# Ignore build artifacts and local env when sending context to Docker.
+.git
+.gitignore
+**/.next
+**/node_modules
+**/build
+**/*.md
+docs
+assets
+infra/ansible
+infra/terraform
+.env
+.env.*
+!.env.example
+*.bat
+Tiltfile
