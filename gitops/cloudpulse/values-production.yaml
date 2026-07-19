@@ -6,8 +6,8 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-api-gateway
-    tag: "latest"
+    repository: durganadimpalli/cloudpulse-api-gateway
+    tag: "4d84f98431a6"
     pullPolicy: Always
   hpa:
     enabled: false
@@ -19,13 +19,12 @@ backend:
     DRIVER_SERVICE_URL: "driver-service:9092"
     JAEGER_ENDPOINT: ""
     REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
-
 frontend:
   enabled: true
   replicaCount: 1
   image:
-    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-web
-    tag: "latest"
+    repository: durganadimpalli/cloudpulse-web
+    tag: "4d84f98431a6"
     pullPolicy: Always
   env:
     NODE_ENV: production
@@ -58,13 +57,10 @@ ingress:
     www:
       enabled: true
       host: www.cloudpulse.live
-
 mongo:
   enabled: true
-
 rabbitmq:
   enabled: true
-
 microservices:
   trip-service:
     enabled: true
@@ -91,7 +87,6 @@ microservices:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-payment-service
       tag: "latest"
       pullPolicy: Always
-
 namespace:
   create: true
   name: cloudpulse
