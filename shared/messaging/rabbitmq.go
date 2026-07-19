@@ -252,6 +252,34 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 	}
 
 	if err := r.declareAndBindQueue(
+		NotifyTripLifecycleQueue,
+		[]string{
+			contracts.TripEventDriverEnRoute,
+			contracts.TripEventDriverArrived,
+			contracts.TripEventStarted,
+			contracts.TripEventCompleted,
+			contracts.TripEventCancelled,
+		},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+
+	if err := r.declareAndBindQueue(
+		TripLifecycleUpdateQueue,
+		[]string{
+			contracts.TripEventDriverEnRoute,
+			contracts.TripEventDriverArrived,
+			contracts.TripEventStarted,
+			contracts.TripEventCompleted,
+			contracts.TripEventCancelled,
+		},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+
+	if err := r.declareAndBindQueue(
 		PaymentTripResponseQueue,
 		[]string{contracts.PaymentCmdCreateSession},
 		TripExchange,

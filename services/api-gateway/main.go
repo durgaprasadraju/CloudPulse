@@ -75,7 +75,7 @@ func main() {
 		handleDriversWebSocket(w, r, rabbitmq, locations)
 	}, "/ws/drivers"))
 	mux.Handle("/ws/riders", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleRidersWebSocket(w, r, rabbitmq)
+		handleRidersWebSocket(w, r, rabbitmq, locations)
 	}, "/ws/riders"))
 	mux.Handle("/webhook/stripe", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleStripeWebhook(w, r, rabbitmq)

@@ -255,6 +255,7 @@ microservices:
       REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
       LOCAL_SEED_DRIVERS: "true"
       LOCAL_AUTO_ACCEPT: "true"
+      LOCAL_SIMULATE_TRIPS: "true"
       JAEGER_ENDPOINT: ""
     # DATABASE_URL injected via --set / values-production from Secrets Manager
     extraEnv: []

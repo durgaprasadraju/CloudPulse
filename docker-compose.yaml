@@ -127,6 +127,7 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       LOCAL_SEED_DRIVERS: ${LOCAL_SEED_DRIVERS:-true}
       LOCAL_AUTO_ACCEPT: ${LOCAL_AUTO_ACCEPT:-true}
+      LOCAL_SIMULATE_TRIPS: ${LOCAL_SIMULATE_TRIPS:-true}
     depends_on:
       rabbitmq:
         condition: service_healthy

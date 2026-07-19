@@ -83,6 +83,10 @@ func main() {
 	paymentConsumer := events.NewPaymentConsumer(rabbitmq, svc)
 	go paymentConsumer.Listen()
 
+	// Start lifecycle consumer (en_route → arrived → started → completed → payment)
+	lifecycleConsumer := events.NewLifecycleConsumer(rabbitmq, svc)
+	go lifecycleConsumer.Listen()
+
 	// Starting the gRPC server
 	grpcServer := grpcserver.NewServer(tracing.WithTracingInterceptors()...)
 	grpc.NewGRPCHandler(grpcServer, svc, publisher)

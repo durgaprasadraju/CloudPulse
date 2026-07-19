@@ -15,10 +15,11 @@ Confirm local prototype flags (default in compose):
 ```env
 LOCAL_SEED_DRIVERS=true
 LOCAL_AUTO_ACCEPT=true
+LOCAL_SIMULATE_TRIPS=true
 STRIPE_SECRET_KEY=sk_test_replace_me
 ```
 
-With these, **one rider browser tab** is enough (no live driver required).
+With these, **one rider browser tab** is enough (no live driver required). You should see nearby cars on the map, then a full Uber-like lifecycle before payment.
 
 ---
 
@@ -49,55 +50,62 @@ docker compose ps
 ### Steps
 
 1. Open http://localhost:3000  
-2. Click **Rider**  
-3. On the map, click a destination near San Francisco (default pickup is ~Market St)  
-4. Wait for fare packages (sedan / suv / van / luxury)  
-5. Select **Sedan** (or any package) to start the trip  
-6. UI shows **Looking for a driver** briefly  
-7. Transitions to **Driver assigned** then **Payment Required**  
-8. Click **Pay … (local)**  
-9. Land on **Payment Successful**
+2. Click **I Need a Ride**  
+3. Confirm **nearby cars** are visible and moving on the map  
+4. (Optional) Click **Move pickup**, then tap a new pickup point  
+5. Tap a **dropoff** near San Francisco  
+6. Choose a fare package (e.g. Sedan)  
+7. Watch status progress:
+   - Finding your driver  
+   - Driver assigned / Driver is coming (assigned car moves toward you)  
+   - Driver has arrived  
+   - On the way (car follows the route)  
+   - Trip complete → mock payment form  
+8. Enter any card details → **Pay** → thanks / receipt screen  
 
 ### What happened under the hood
 
 ```text
-POST /trip/preview     → trip-service + OSRM + Mongo ride_fares
-POST /trip/start       → Mongo trip + trip.event.created
-driver-service         → match local-driver-sedan → driver.cmd.trip_accept
-trip-service           → accepted + trip.event.driver_assigned
-                       → payment.cmd.create_session
-payment-service        → cs_test_local_* + payment.event.session_created
-WS to rider            → Pay UI
-local redirect         → ?payment=success
+WS nearby drivers   → Redis GEO → rider map markers
+POST /trip/preview  → trip-service + OSRM + Mongo ride_fares
+POST /trip/start    → Mongo trip + trip.event.created
+driver-service      → match local-driver-* → auto-accept
+                    → trip_simulator animates locations + lifecycle events
+trip-service        → persist en_route/arrived/in_progress/completed
+                    → payment.cmd.create_session (after completed)
+payment-service     → cs_test_local_* + payment.event.session_created
+Rider UI            → MockPaymentModal (no real Stripe charge)
 ```
 
 ### Log verification
 
 ```bash
-docker compose logs --tail=50 trip-service | grep -E 'Publishing|OSRM'
-docker compose logs --tail=50 driver-service | grep -E 'Found suitable|Auto-accepting'
+docker compose logs --tail=50 trip-service | grep -E 'Publishing|OSRM|lifecycle'
+docker compose logs --tail=50 driver-service | grep -E 'Found suitable|Auto-accepting|simulation'
 docker compose logs --tail=50 payment-service | grep -E 'Payment session|local payment'
-docker compose logs --tail=30 api-gateway
+docker compose logs --tail=30 api-gateway | grep -E 'nearby|WebSocket'
 ```
 
 **Pass criteria**
 
+- [ ] Nearby drivers visible before booking  
 - [ ] Preview returns multiple fares  
-- [ ] Driver auto-assigned without second tab  
-- [ ] Payment panel shows amount + trip ID  
-- [ ] Success screen after Pay  
+- [ ] Full lifecycle to completed without a second tab  
+- [ ] Mock payment panel after trip completes  
+- [ ] Receipt / thanks screen after Pay  
 
 ---
 
 ## 4. Simulation B — Live driver (two browsers)
 
-Turn off auto-accept to exercise the real accept UX:
+Turn off auto-accept to exercise the real accept UX (keep simulation on the driver UI):
 
 ```bash
 # In .env
 LOCAL_AUTO_ACCEPT=false
 # Keep LOCAL_SEED_DRIVERS=true OR false — if true, seeds still exist;
 # live drivers are preferred when registered.
+# Driver tab "Auto-simulate trip after accept" should stay ON.
 
 docker compose up -d --force-recreate driver-service
 ```
@@ -107,13 +115,13 @@ docker compose up -d --force-recreate driver-service
 1. **Tab 1 — Driver:** open http://localhost:3000 → Driver → choose **Sedan** → leave open  
 2. Confirm gateway log: driver registered / WS connected  
 3. **Tab 2 — Rider:** Rider → destination → select **Sedan**  
-4. Tab 1 shows trip request → **Accept**  
-5. Tab 2 shows assignment + payment  
+4. Tab 1 shows trip request → **Accept** (auto-simulate drives the trip)  
+5. Tab 2 shows en route → arrived → in trip → payment  
 
 **Pass criteria**
 
 - [ ] Driver receives `driver.cmd.trip_request`  
-- [ ] Accept advances rider to payment  
+- [ ] Accept advances rider through lifecycle  
 - [ ] Decline rematches (`trip.event.driver_not_interested`)  
 
 ---
@@ -129,19 +137,35 @@ docker compose up -d --force-recreate driver-service
 
 Do **not** open a Driver tab. Start a rider trip.
 
-**Expect:** UI **No drivers found**; logs `Found suitable drivers 0` and `trip.event.no_drivers_found`.
+**Expect:** UI **No drivers nearby**; logs `Found suitable drivers 0` and `trip.event.no_drivers_found`.
 
 Restore seeds afterward:
 
 ```bash
 LOCAL_SEED_DRIVERS=true
 LOCAL_AUTO_ACCEPT=true
+LOCAL_SIMULATE_TRIPS=true
 docker compose up -d --force-recreate driver-service
 ```
 
 ---
 
-## 6. API-level smoke tests (optional)
+## 6. Simulation D — Uber-like two-tab checklist
+
+See also [uber-like-flow.md](./uber-like-flow.md).
+
+| Step | Rider | Driver |
+|------|-------|--------|
+| 1 | Open map, see fleet | Online as Sedan |
+| 2 | Set dropoff, request Sedan | Receive request |
+| 3 | See "Finding…" then assigned | Accept (auto-sim ON) |
+| 4 | Watch car approach | Panel shows simulating |
+| 5 | Arrived → in trip | Driving animation |
+| 6 | Mock pay + thanks | Trip completed |
+
+---
+
+## 7. API-level smoke tests (optional)
 
 ```bash
 # Preview (adjust coordinates as needed)
@@ -166,7 +190,7 @@ Watch RabbitMQ management UI → Queues for message rates.
 
 ---
 
-## 7. Observability during tests
+## 8. Observability during tests
 
 | Tool | Use |
 |------|-----|
@@ -176,7 +200,7 @@ Watch RabbitMQ management UI → Queues for message rates.
 
 ---
 
-## 8. Tear down
+## 9. Tear down
 
 ```bash
 docker compose down          # keep volumes
@@ -185,7 +209,7 @@ docker compose down -v       # wipe mongo/redis/postgres data
 
 ---
 
-## 9. CI / production simulation note
+## 10. CI / production simulation note
 
 GitOps does **not** replace this local sim. After images ship to Docker Hub, validate the same user journey against:
 

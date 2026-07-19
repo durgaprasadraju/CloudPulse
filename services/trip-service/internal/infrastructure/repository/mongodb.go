@@ -69,7 +69,8 @@ func (r *mongoRepository) UpdateTrip(ctx context.Context, tripID string, status 
 		return err
 	}
 
-	if result.ModifiedCount == 0 {
+	// ModifiedCount can be 0 if the document already had the same status (idempotent lifecycle updates).
+	if result.MatchedCount == 0 {
 		return fmt.Errorf("trip not found: %s", tripID)
 	}
 

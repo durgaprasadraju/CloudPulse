@@ -26,26 +26,27 @@ const driverMarker = new L.Icon({
 
 const startLocationMarker = new L.Icon({
   iconUrl: "https://www.svgrepo.com/show/535711/user.svg",
-  iconSize: [30, 40], // Size of the marker
-  iconAnchor: [20, 40], // Anchor point
+  iconSize: [30, 40],
+  iconAnchor: [20, 40],
 });
 
 const destinationMarker = new L.Icon({
   iconUrl: "data:image/svg+xml;utf8," + encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e11d48" stroke="#fff" stroke-width="1.5"><path d="M12 2C7.6 2 4 5.6 4 10c0 5.5 7.3 11.5 7.6 11.7.2.2.6.2.8 0C12.7 21.5 20 15.5 20 10c0-4.4-3.6-8-8-8zm0 11a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>`
   ),
-  iconSize: [40, 40], // Size of the marker
-  iconAnchor: [20, 40], // Anchor point
+  iconSize: [40, 40],
+  iconAnchor: [20, 40],
 });
 
 export const DriverMap = ({ packageSlug }: { packageSlug: CarPackageSlug }) => {
   const mapRef = useRef<L.Map>(null)
   const userID = useMemo(() => crypto.randomUUID(), [])
-  const [riderLocation, setRiderLocation] = useState<Coordinate>(START_LOCATION)
+  const [driverLocation, setDriverLocation] = useState<Coordinate>(START_LOCATION)
+  const [autoSimulate, setAutoSimulate] = useState(true)
 
   const driverGeohash = useMemo(() =>
-    Geohash.encode(riderLocation?.latitude, riderLocation?.longitude, 7)
-    , [riderLocation?.latitude, riderLocation?.longitude]);
+    Geohash.encode(driverLocation?.latitude, driverLocation?.longitude, 7)
+    , [driverLocation?.latitude, driverLocation?.longitude]);
 
   const {
     error,
@@ -55,37 +56,26 @@ export const DriverMap = ({ packageSlug }: { packageSlug: CarPackageSlug }) => {
     sendMessage,
     setTripStatus,
     resetTripStatus,
+    acceptAndMaybeSimulate,
+    simulating,
   } = useDriverStreamConnection({
-    location: riderLocation,
+    location: driverLocation,
     geohash: driverGeohash,
     userID,
     packageSlug,
+    autoSimulate,
   })
 
   const handleMapClick = (e: L.LeafletMouseEvent) => {
-    setRiderLocation({
+    if (simulating) return;
+    setDriverLocation({
       latitude: e.latlng.lat,
       longitude: e.latlng.lng
     })
   }
 
   const handleAcceptTrip = () => {
-    if (!requestedTrip || !requestedTrip.id || !driver) {
-      alert("No trip ID found or driver is not set")
-      return
-    }
-
-    sendMessage({
-      type: TripEvents.DriverTripAccept,
-      data: {
-        tripID: requestedTrip.id,
-        riderID: requestedTrip.userID,
-        driver: driver,
-      }
-    })
-
-    setTripStatus(TripEvents.DriverTripAccept)
-
+    acceptAndMaybeSimulate()
   }
 
   const handleDeclineTrip = () => {
@@ -99,40 +89,45 @@ export const DriverMap = ({ packageSlug }: { packageSlug: CarPackageSlug }) => {
       data: {
         tripID: requestedTrip.id,
         riderID: requestedTrip.userID,
-        driver: driver,
+        driver,
       }
     })
-
     setTripStatus(TripEvents.DriverTripDecline)
     resetTripStatus()
   }
-
-  console.log({ requestedTrip })
 
   const parsedRoute = useMemo(() =>
     requestedTrip?.route?.geometry[0]?.coordinates
       .map((coord) => [coord?.longitude, coord?.latitude] as [number, number])
     , [requestedTrip])
 
-  // destination is the last coordinate in the route
   const destination = useMemo(() =>
     requestedTrip?.route?.geometry[0]?.coordinates[requestedTrip?.route?.geometry[0]?.coordinates?.length - 1]
     , [requestedTrip])
-  // start location is the first coordinate in the route
+
   const startLocation = useMemo(() =>
     requestedTrip?.route?.geometry[0]?.coordinates[0]
     , [requestedTrip])
 
-
   if (error) {
-    return <div>Error: {error}</div>
+    return <div className="p-4 text-red-600">Error: {error}</div>
   }
 
   return (
     <div className="relative flex flex-col md:flex-row h-screen">
-      <div className="flex-1">
+      <div className="flex-1 relative">
+        <div className="absolute top-3 left-3 z-[1000]">
+          <label className="flex items-center gap-2 rounded-full bg-white px-3 py-1.5 text-sm shadow cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoSimulate}
+              onChange={(e) => setAutoSimulate(e.target.checked)}
+            />
+            Auto-simulate trip after accept
+          </label>
+        </div>
         <MapContainer
-          center={[riderLocation.latitude, riderLocation.longitude]}
+          center={[driverLocation.latitude, driverLocation.longitude]}
           zoom={13}
           style={{ height: '100%', width: '100%' }}
           ref={mapRef}
@@ -144,25 +139,25 @@ export const DriverMap = ({ packageSlug }: { packageSlug: CarPackageSlug }) => {
 
           <Marker
             key={userID}
-            position={[riderLocation.latitude, riderLocation.longitude]}
+            position={[driverLocation.latitude, driverLocation.longitude]}
             icon={driverMarker}
           >
             <Popup>
-              Driver ID: {userID}
+              You (driver)
               <br />
-              Geohash: {driverGeohash}
+              {simulating ? 'Simulating trip…' : 'Click map to reposition'}
             </Popup>
           </Marker>
 
           {startLocation && (
-            <Marker position={[startLocation.longitude, startLocation.latitude]} icon={startLocationMarker}>
-              <Popup>Start Location</Popup>
+            <Marker position={[startLocation.latitude, startLocation.longitude]} icon={startLocationMarker}>
+              <Popup>Rider pickup</Popup>
             </Marker>
           )}
 
           {destination && (
-            <Marker position={[destination.longitude, destination.latitude]} icon={destinationMarker}>
-              <Popup>Destination</Popup>
+            <Marker position={[destination.latitude, destination.longitude]} icon={destinationMarker}>
+              <Popup>Dropoff</Popup>
             </Marker>
           )}
 
@@ -182,6 +177,7 @@ export const DriverMap = ({ packageSlug }: { packageSlug: CarPackageSlug }) => {
           <DriverTripOverview
             trip={requestedTrip}
             status={tripStatus}
+            simulating={simulating}
             onAcceptTrip={handleAcceptTrip}
             onDeclineTrip={handleDeclineTrip}
           />

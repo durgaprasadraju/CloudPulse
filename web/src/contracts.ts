@@ -11,14 +11,20 @@ export enum BackendEndpoints {
 export enum TripEvents {
   NoDriversFound = "trip.event.no_drivers_found",
   DriverAssigned = "trip.event.driver_assigned",
+  DriverEnRoute = "trip.event.driver_en_route",
+  DriverArrived = "trip.event.driver_arrived",
+  TripStarted = "trip.event.started",
   Completed = "trip.event.completed",
   Cancelled = "trip.event.cancelled",
   Created = "trip.event.created",
   DriverLocation = "driver.cmd.location",
+  RiderLocation = "rider.cmd.location",
   DriverTripRequest = "driver.cmd.trip_request",
   DriverTripAccept = "driver.cmd.trip_accept",
   DriverTripDecline = "driver.cmd.trip_decline",
   DriverRegister = "driver.cmd.register",
+  TripStatus = "trip.cmd.status",
+  TripCancel = "trip.cmd.cancel",
   PaymentSessionCreated = "payment.event.session_created",
 }
 
@@ -30,10 +36,15 @@ export type ServerWsMessage =
   | DriverTripRequest
   | DriverRegisterRequest
   | TripCreatedRequest
+  | TripLifecycleRequest
   | NoDriversFoundRequest;
 
 // Messages sent from the client to the server via the websocket
-export type ClientWsMessage = DriverResponseToTripResponse
+export type ClientWsMessage =
+  | DriverResponseToTripResponse
+  | DriverLocationUpdate
+  | TripStatusUpdate
+  | TripCancelMessage;
 
 interface TripCreatedRequest {
   type: TripEvents.Created;
@@ -70,6 +81,16 @@ interface DriverAssignedRequest {
   data: Trip;
 }
 
+interface TripLifecycleRequest {
+  type:
+    | TripEvents.DriverEnRoute
+    | TripEvents.DriverArrived
+    | TripEvents.TripStarted
+    | TripEvents.Completed
+    | TripEvents.Cancelled;
+  data: Trip | { trip: Trip };
+}
+
 interface DriverLocationRequest {
   type: TripEvents.DriverLocation;
   data: Driver[];
@@ -81,6 +102,30 @@ interface DriverResponseToTripResponse {
     tripID: string;
     riderID: string;
     driver: Driver;
+  };
+}
+
+interface DriverLocationUpdate {
+  type: TripEvents.DriverLocation;
+  data: {
+    location: Coordinate;
+    geohash: string;
+  };
+}
+
+interface TripStatusUpdate {
+  type: TripEvents.TripStatus;
+  data: {
+    event: TripEvents;
+    riderID: string;
+    trip: Trip;
+  };
+}
+
+interface TripCancelMessage {
+  type: TripEvents.TripCancel;
+  data: {
+    tripID: string;
   };
 }
 
@@ -106,4 +151,10 @@ export function isValidTripEvent(event: string): event is TripEvents {
 
 export function isValidWsMessage(message: ServerWsMessage): message is ServerWsMessage {
   return isValidTripEvent(message.type);
+}
+
+export function unwrapTrip(data: Trip | { trip: Trip } | undefined): Trip | null {
+  if (!data) return null;
+  if ("trip" in data && data.trip) return data.trip;
+  return data as Trip;
 }

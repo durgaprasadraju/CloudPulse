@@ -88,8 +88,15 @@ func (s *Service) RegisterDriver(driverId string, packageSlug string) (*pb.Drive
 	}
 
 	if s.locations != nil && driver.Location != nil {
-		if err := s.locations.UpdateDriverLocation(context.Background(), driverId,
-			driver.Location.Latitude, driver.Location.Longitude); err != nil {
+		if err := s.locations.UpsertDriver(context.Background(), tracking.DriverLocation{
+			ID:             driverId,
+			Latitude:       driver.Location.Latitude,
+			Longitude:      driver.Location.Longitude,
+			Name:           driver.Name,
+			ProfilePicture: driver.ProfilePicture,
+			CarPlate:       driver.CarPlate,
+			PackageSlug:    driver.PackageSlug,
+		}); err != nil {
 			log.Printf("Failed to track driver %s location: %v", driverId, err)
 		}
 	}

@@ -15,13 +15,17 @@ type tripConsumer struct {
 	rabbitmq   *messaging.RabbitMQ
 	service    *Service
 	autoAccept bool
+	simulate   bool
+	simulator  *tripSimulator
 }
 
-func NewTripConsumer(rabbitmq *messaging.RabbitMQ, service *Service, autoAccept bool) *tripConsumer {
+func NewTripConsumer(rabbitmq *messaging.RabbitMQ, service *Service, autoAccept, simulate bool, simulator *tripSimulator) *tripConsumer {
 	return &tripConsumer{
 		rabbitmq:   rabbitmq,
 		service:    service,
 		autoAccept: autoAccept,
+		simulate:   simulate,
+		simulator:  simulator,
 	}
 }
 
@@ -101,6 +105,9 @@ func (c *tripConsumer) handleFindAndNotifyDrivers(ctx context.Context, payload m
 		}); err != nil {
 			log.Printf("Failed to publish auto-accept: %v", err)
 			return err
+		}
+		if c.simulate && c.simulator != nil {
+			c.simulator.Start(payload.Trip, driver)
 		}
 		return nil
 	}

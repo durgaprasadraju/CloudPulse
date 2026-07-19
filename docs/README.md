@@ -24,10 +24,16 @@ Ride-sharing platform for **CloudPulse.live** — Go microservices, Next.js fron
 ### Simulation & testing
 | Document | Description |
 |----------|-------------|
+| [Uber-like product flow](./simulation/uber-like-flow.md) | How the demo mimics real Uber booking |
 | [Local E2E simulation](./simulation/local-e2e-test.md) | Step-by-step test of the full ride flow |
 | [Failure & edge cases](./simulation/edge-cases.md) | No drivers, decline, payment mock, reconnect |
 
-### Ops (elsewhere in repo)
+### Ops
+| Document | Description |
+|----------|-------------|
+| [EKS deployment issues & fixes](./ops/eks-deployment-issues-and-fixes.md) | Chronological issues from local → EKS/GitOps and how each was fixed |
+
+Also elsewhere in the repo:
 - Local stack: root `docker-compose.yaml`, `.env.example`
 - AWS infra: `terraform/`
 - K8s deploy: `charts/cloudpulse/`, `gitops/`

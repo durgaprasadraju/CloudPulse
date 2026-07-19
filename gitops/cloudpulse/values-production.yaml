@@ -6,8 +6,8 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    repository: durganadimpalli/cloudpulse-api-gateway
-    tag: "06346a5ac8b3"
+    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-api-gateway
+    tag: "uber-202607191713"
     pullPolicy: Always
   hpa:
     enabled: false
@@ -23,8 +23,8 @@ frontend:
   enabled: true
   replicaCount: 1
   image:
-    repository: durganadimpalli/cloudpulse-web
-    tag: "4d84f98431a6"
+    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-web
+    tag: "uber-202607191713"
     pullPolicy: Always
   env:
     NODE_ENV: production
@@ -68,13 +68,13 @@ microservices:
     enabled: true
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
-      tag: "34072bac8d49"
+      tag: "uber-202607191713"
       pullPolicy: Always
   driver-service:
     enabled: true
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-driver-service
-      tag: "34072bac8d49"
+      tag: "uber-202607191713"
       pullPolicy: Always
     env:
       ENVIRONMENT: production
@@ -82,6 +82,7 @@ microservices:
       REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
       LOCAL_SEED_DRIVERS: "true"
       LOCAL_AUTO_ACCEPT: "true"
+      LOCAL_SIMULATE_TRIPS: "true"
       JAEGER_ENDPOINT: ""
   payment-service:
     enabled: true

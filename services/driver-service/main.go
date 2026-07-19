@@ -63,11 +63,13 @@ func main() {
 	}
 
 	// Redis (Terraform ElastiCache / local compose) — real-time location tracking
+	var locations *tracking.LocationStore
 	if redisURL := env.GetString("REDIS_URL", ""); redisURL != "" {
-		locations, err := tracking.NewLocationStore(redisURL)
+		loc, err := tracking.NewLocationStore(redisURL)
 		if err != nil {
 			log.Printf("Redis unavailable, location tracking disabled: %v", err)
 		} else {
+			locations = loc
 			defer locations.Close()
 			svc.AttachLocationStore(locations)
 			log.Println("Connected to Redis for driver location tracking")
@@ -75,9 +77,11 @@ func main() {
 	}
 
 	autoAccept := env.GetBool("LOCAL_AUTO_ACCEPT", false)
+	simulateTrips := env.GetBool("LOCAL_SIMULATE_TRIPS", true)
 	if env.GetBool("LOCAL_SEED_DRIVERS", false) {
 		svc.SeedLocalDrivers([]string{"sedan", "suv", "van", "luxury"})
 		log.Println("Seeded local drivers for sedan/suv/van/luxury")
+		go svc.WanderSeedDrivers(ctx)
 	}
 
 	// RabbitMQ connection
@@ -93,7 +97,8 @@ func main() {
 	grpcServer := grpcserver.NewServer(tracing.WithTracingInterceptors()...)
 	NewGrpcHandler(grpcServer, svc)
 
-	consumer := NewTripConsumer(rabbitmq, svc, autoAccept)
+	sim := newTripSimulator(rabbitmq, svc, locations)
+	consumer := NewTripConsumer(rabbitmq, svc, autoAccept, simulateTrips, sim)
 	go func() {
 		if err := consumer.Listen(); err != nil {
 			log.Fatalf("Failed to listen to the message: %v", err)
