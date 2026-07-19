@@ -18,6 +18,9 @@ const (
 	TripEventStarted             = "trip.event.started"
 	TripEventCompleted           = "trip.event.completed"
 	TripEventCancelled           = "trip.event.cancelled"
+	TripEventOTPIssued           = "trip.event.otp_issued"
+	TripEventOTPFailed           = "trip.event.otp_failed"
+	TripEventOTPVerified         = "trip.event.otp_verified"
 
 	// Driver commands (driver.cmd.*)
 	DriverCmdTripRequest = "driver.cmd.trip_request"
@@ -28,6 +31,7 @@ const (
 	RiderCmdLocation     = "rider.cmd.location"
 	TripCmdCancel        = "trip.cmd.cancel"
 	TripCmdStatus        = "trip.cmd.status"
+	TripCmdVerifyOTP     = "trip.cmd.verify_otp"
 
 	// Payment events (payment.event.*)
 	PaymentEventSessionCreated = "payment.event.session_created"

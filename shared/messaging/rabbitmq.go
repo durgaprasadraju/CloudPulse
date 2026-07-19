@@ -259,6 +259,7 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 			contracts.TripEventStarted,
 			contracts.TripEventCompleted,
 			contracts.TripEventCancelled,
+			contracts.TripEventOTPIssued,
 		},
 		TripExchange,
 	); err != nil {
@@ -273,6 +274,39 @@ func (r *RabbitMQ) setupExchangesAndQueues() error {
 			contracts.TripEventStarted,
 			contracts.TripEventCompleted,
 			contracts.TripEventCancelled,
+		},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+
+	if err := r.declareAndBindQueue(
+		TripOTPVerifyQueue,
+		[]string{contracts.TripCmdVerifyOTP, contracts.TripCmdCancel},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+
+	if err := r.declareAndBindQueue(
+		NotifyDriverControlQueue,
+		[]string{
+			contracts.TripEventOTPFailed,
+			contracts.TripEventOTPVerified,
+			contracts.TripEventCancelled,
+			contracts.TripEventStarted,
+		},
+		TripExchange,
+	); err != nil {
+		return err
+	}
+
+	if err := r.declareAndBindQueue(
+		DriverSimControlQueue,
+		[]string{
+			contracts.TripEventOTPVerified,
+			contracts.TripEventCancelled,
+			contracts.TripEventStarted,
 		},
 		TripExchange,
 	); err != nil {

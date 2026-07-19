@@ -54,4 +54,19 @@ spec:
                 port:
                   number: {{ .Values.frontend.service.port }}
     {{- end }}
+    {{- if and .Values.driverFrontend.enabled .Values.ingress.hosts.driver }}
+    # driver.cloudpulse.live → Driver frontend
+    - host: {{ .Values.ingress.hosts.driver.host | quote }}
+      http:
+        paths:
+          {{- range .Values.ingress.hosts.driver.paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "cloudpulse.driverFrontend.fullname" $ }}
+                port:
+                  number: {{ $.Values.driverFrontend.service.port }}
+          {{- end }}
+    {{- end }}
 {{- end }}

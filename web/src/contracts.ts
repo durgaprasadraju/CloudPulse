@@ -1,12 +1,13 @@
 import { Coordinate, Driver, Route, RouteFare, Trip } from "./types";
 
-// These are the endpoints the API Gateway must have for the frontend to work correctly
-export enum BackendEndpoints {
-  PREVIEW_TRIP = "/trip/preview",
-  START_TRIP = "/trip/start",
-  WS_DRIVERS = "/drivers",
-  WS_RIDERS = "/riders",
-}
+export const BackendEndpoints = {
+  PREVIEW_TRIP: "/trip/preview",
+  START_TRIP: "/trip/start",
+  WS_DRIVERS: "/drivers",
+  WS_RIDERS: "/riders",
+  MOCK_PAYMENT_SUCCESS: "/payment/mock-success",
+  TRIP_REVIEW: (tripID: string) => `/trips/${tripID}/review`,
+} as const;
 
 export enum TripEvents {
   NoDriversFound = "trip.event.no_drivers_found",
@@ -17,6 +18,9 @@ export enum TripEvents {
   Completed = "trip.event.completed",
   Cancelled = "trip.event.cancelled",
   Created = "trip.event.created",
+  OTPIssued = "trip.event.otp_issued",
+  OTPFailed = "trip.event.otp_failed",
+  OTPVerified = "trip.event.otp_verified",
   DriverLocation = "driver.cmd.location",
   RiderLocation = "rider.cmd.location",
   DriverTripRequest = "driver.cmd.trip_request",
@@ -25,10 +29,10 @@ export enum TripEvents {
   DriverRegister = "driver.cmd.register",
   TripStatus = "trip.cmd.status",
   TripCancel = "trip.cmd.cancel",
+  TripVerifyOTP = "trip.cmd.verify_otp",
   PaymentSessionCreated = "payment.event.session_created",
 }
 
-// Messages sent from the server to the client via the websocket
 export type ServerWsMessage =
   | PaymentSessionCreatedRequest
   | DriverAssignedRequest
@@ -37,9 +41,9 @@ export type ServerWsMessage =
   | DriverRegisterRequest
   | TripCreatedRequest
   | TripLifecycleRequest
+  | OTPIssuedRequest
   | NoDriversFoundRequest;
 
-// Messages sent from the client to the server via the websocket
 export type ClientWsMessage =
   | DriverResponseToTripResponse
   | DriverLocationUpdate
@@ -69,11 +73,23 @@ export interface PaymentEventSessionCreatedData {
   sessionID: string;
   amount: number;
   currency: string;
+  provider?: string;
+  checkoutURL?: string;
+}
+
+export interface TripOTPIssuedData {
+  tripID: string;
+  otp: string;
 }
 
 interface PaymentSessionCreatedRequest {
   type: TripEvents.PaymentSessionCreated;
   data: PaymentEventSessionCreatedData;
+}
+
+interface OTPIssuedRequest {
+  type: TripEvents.OTPIssued;
+  data: TripOTPIssuedData;
 }
 
 interface DriverAssignedRequest {
@@ -157,4 +173,15 @@ export function unwrapTrip(data: Trip | { trip: Trip } | undefined): Trip | null
   if (!data) return null;
   if ("trip" in data && data.trip) return data.trip;
   return data as Trip;
+}
+
+/** OSRM/geojson is [lon, lat]; Leaflet needs [lat, lon]. */
+export function toLeafletRoute(coords: number[][]): [number, number][] {
+  return coords.map(([a, b]) => {
+    // Heuristic: Hyderabad lon ~78, lat ~17 — if first value looks like lon, swap.
+    if (Math.abs(a) > 40 && Math.abs(b) < 40) {
+      return [b, a];
+    }
+    return [a, b];
+  });
 }

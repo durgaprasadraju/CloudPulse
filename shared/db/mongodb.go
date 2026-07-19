@@ -15,6 +15,7 @@ import (
 const (
 	TripsCollection     = "trips"
 	RideFaresCollection = "ride_fares"
+	ReviewsCollection   = "reviews"
 )
 
 // MongoConfig holds MongoDB connection configuration

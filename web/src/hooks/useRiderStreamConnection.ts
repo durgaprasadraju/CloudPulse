@@ -8,6 +8,7 @@ import {
   isValidWsMessage,
   BackendEndpoints,
   unwrapTrip,
+  TripOTPIssuedData,
 } from '../contracts';
 
 export function useRiderStreamConnection(location: Coordinate, userID: string) {
@@ -16,6 +17,7 @@ export function useRiderStreamConnection(location: Coordinate, userID: string) {
   const [paymentSession, setPaymentSession] = useState<PaymentEventSessionCreatedData | null>(null);
   const [assignedDriver, setAssignedDriver] = useState<Driver | null>(null);
   const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
+  const [pickupOTP, setPickupOTP] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -50,6 +52,11 @@ export function useRiderStreamConnection(location: Coordinate, userID: string) {
           setPaymentSession(message.data);
           setTripStatus(message.type);
           break;
+        case TripEvents.OTPIssued: {
+          const data = message.data as TripOTPIssuedData;
+          setPickupOTP(data.otp);
+          break;
+        }
         case TripEvents.DriverAssigned: {
           const trip = unwrapTrip(message.data);
           if (trip?.driver) {
@@ -85,6 +92,13 @@ export function useRiderStreamConnection(location: Coordinate, userID: string) {
               });
             }
           }
+          if (message.type === TripEvents.TripStarted) {
+            setPickupOTP(null);
+          }
+          if (message.type === TripEvents.Cancelled) {
+            setPickupOTP(null);
+            setPaymentSession(null);
+          }
           setTripStatus(message.type);
           break;
         }
@@ -114,7 +128,6 @@ export function useRiderStreamConnection(location: Coordinate, userID: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userID]);
 
-  // Keep sending rider location so nearby-driver queries stay centered
   useEffect(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN || !location) return;
@@ -129,7 +142,7 @@ export function useRiderStreamConnection(location: Coordinate, userID: string) {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         type: TripEvents.TripCancel,
-        data: { tripID: tripID ?? '' },
+        data: { tripID: tripID ?? activeTrip?.id ?? '' },
       }));
     }
   };
@@ -139,12 +152,14 @@ export function useRiderStreamConnection(location: Coordinate, userID: string) {
     setPaymentSession(null);
     setAssignedDriver(null);
     setActiveTrip(null);
+    setPickupOTP(null);
   };
 
   return {
     drivers,
     assignedDriver,
     activeTrip,
+    pickupOTP,
     error,
     tripStatus,
     paymentSession,

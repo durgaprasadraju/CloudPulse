@@ -6,11 +6,13 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"syscall"
+
+	"ride-sharing/shared/auth"
 	"ride-sharing/shared/env"
 	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/tracing"
 	"ride-sharing/shared/tracking"
-	"syscall"
 
 	grpcserver "google.golang.org/grpc"
 )
@@ -18,7 +20,6 @@ import (
 var GrpcAddr = ":9092"
 
 func main() {
-	// Initialize Tracing
 	tracerCfg := tracing.Config{
 		ServiceName:    "driver-service",
 		Environment:    env.GetString("ENVIRONMENT", "development"),
@@ -49,20 +50,21 @@ func main() {
 	}
 
 	svc := NewService()
+	var accounts *auth.AccountStore
 
-	// PostgreSQL (Terraform RDS / local compose) — persistent driver registry
 	if databaseURL := env.GetString("DATABASE_URL", ""); databaseURL != "" {
-		store, err := NewDriverStore(databaseURL)
+		store, err := auth.NewAccountStore(databaseURL)
 		if err != nil {
-			log.Printf("PostgreSQL unavailable, using in-memory drivers only: %v", err)
+			log.Printf("PostgreSQL unavailable, driver accounts disabled: %v", err)
 		} else {
-			defer store.Close()
-			svc.AttachStore(store)
-			log.Println("Connected to PostgreSQL for driver persistence")
+			accounts = store
+			defer accounts.Close()
+			svc.AttachAccounts(accounts)
+			log.Println("Connected to PostgreSQL for durable driver accounts")
 		}
 	}
+	startDriverHTTPServer(env.GetString("AUTH_HTTP_ADDR", ":8085"), accounts, svc)
 
-	// Redis (Terraform ElastiCache / local compose) — real-time location tracking
 	var locations *tracking.LocationStore
 	if redisURL := env.GetString("REDIS_URL", ""); redisURL != "" {
 		loc, err := tracking.NewLocationStore(redisURL)
@@ -77,14 +79,13 @@ func main() {
 	}
 
 	autoAccept := env.GetBool("LOCAL_AUTO_ACCEPT", false)
-	simulateTrips := env.GetBool("LOCAL_SIMULATE_TRIPS", true)
+	simulateTrips := env.GetBool("LOCAL_SIMULATE_TRIPS", false)
 	if env.GetBool("LOCAL_SEED_DRIVERS", false) {
 		svc.SeedLocalDrivers([]string{"sedan", "suv", "van", "luxury"})
 		log.Println("Seeded local drivers for sedan/suv/van/luxury")
 		go svc.WanderSeedDrivers(ctx)
 	}
 
-	// RabbitMQ connection
 	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
 	if err != nil {
 		log.Fatal(err)
@@ -93,7 +94,6 @@ func main() {
 
 	log.Println("Starting RabbitMQ connection")
 
-	// Starting the gRPC server
 	grpcServer := grpcserver.NewServer(tracing.WithTracingInterceptors()...)
 	NewGrpcHandler(grpcServer, svc)
 
@@ -114,7 +114,6 @@ func main() {
 		}
 	}()
 
-	// wait for the shutdown signal
 	<-ctx.Done()
 	log.Println("Shutting down the server...")
 	grpcServer.GracefulStop()

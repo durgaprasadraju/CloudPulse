@@ -1,61 +1,60 @@
 # Uber-like product simulation
 
-How CloudPulse mimics a real Uber booking experience in local and demo environments.
+How CloudPulse mimics a real Uber booking experience with a **rider app** and a **driver app**.
 
-## User journey
+## User journey (two-app OTP flow)
 
 ```text
-Rider opens map
-  → sees nearby cars moving (Redis + WebSocket)
-  → optionally moves pickup pin
-  → taps dropoff
-  → chooses Sedan / SUV / Van / Luxury
-  → "Finding your driver"
-  → Driver assigned / en route (car moves toward pickup)
-  → Driver arrived
-  → Trip in progress (car follows route)
-  → Arrived / trip completed
-  → Mock card checkout + receipt
+Rider (:3000)                         Driver (:3001)
+──────────────                        ──────────────
+Open map / set dropoff                Register / login / Go Online
+Choose package (sedan/suv/…)          Receive trip offer alarm
+Request ride                          Accept trip
+See driver assigned + 6-digit OTP     Tap En route → Arrived
+Share OTP with driver                 Enter rider OTP → trip starts
+Cancel allowed until OTP verified     Auto-simulate travel to dropoff
+See live driver progress              Complete only at destination
+Pay via mock / Stripe checkout        Ready for next trip
 ```
 
 ## Modes
 
-| Mode | Flags | Tabs needed |
-|------|-------|-------------|
-| **Rider-only demo** (default) | `LOCAL_SEED_DRIVERS=true`, `LOCAL_AUTO_ACCEPT=true`, `LOCAL_SIMULATE_TRIPS=true` | Rider only |
-| **Two-sided live** | `LOCAL_AUTO_ACCEPT=false` (seeds optional) | Rider + Driver |
-| **No drivers** | both seed/auto-accept false, no driver tab | Rider → "No drivers nearby" |
+| Mode | Flags | Apps |
+|------|-------|------|
+| **Two-sided live (recommended)** | `LOCAL_SEED_DRIVERS=false`, `LOCAL_AUTO_ACCEPT=false`, `LOCAL_SIMULATE_TRIPS=false` | Rider `:3000` + Driver `:3001` |
+| **Seeded demo** | seeds + auto-accept + simulate true | Rider only — simulator still waits for OTP (use driver app or disable OTP gate for demos) |
 
-## Key components
+## Lifecycle + OTP
 
-| Layer | Role |
-|-------|------|
-| Redis GEO (`shared/tracking`) | Live driver positions |
-| api-gateway rider WS | Polls nearby drivers every 2s; lifecycle event fan-out |
-| driver-service seeds + wander | Cars appear and drift on the map |
-| driver-service `trip_simulator` | After auto-accept: en_route → arrived → started → completed |
-| trip-service lifecycle consumer | Persists statuses; creates payment **after** completed |
-| Driver UI auto-simulate | Live driver tab animates the same lifecycle after Accept |
-| `MockPaymentModal` | In-app demo checkout (no real Stripe charge) |
+| Status | Trigger |
+|--------|---------|
+| `pending` | Rider starts trip |
+| `accepted` | Driver accepts (+ hashed OTP stored, plaintext to rider only) |
+| `en_route` / `arrived` | Driver status buttons |
+| `in_progress` | **OTP verified** (`trip.cmd.verify_otp`) while `arrived` |
+| `completed` | Driver completes at destination → payment session |
+| `payed` | Mock `/payment/mock-success` or Stripe webhook |
+| `cancelled` | Rider cancel **before** OTP start only |
 
-## Events (trip lifecycle)
+## Events
 
-| Event | Rider UI |
-|-------|----------|
-| `trip.event.driver_assigned` | Driver assigned |
-| `trip.event.driver_en_route` | Driver is coming |
-| `trip.event.driver_arrived` | Driver has arrived |
-| `trip.event.started` | On the way |
-| `trip.event.completed` | Preparing receipt |
-| `payment.event.session_created` | Mock pay |
-| `trip.event.cancelled` | Cancelled |
+| Event | Who |
+|-------|-----|
+| `trip.event.otp_issued` | Rider (contains plaintext OTP) |
+| `trip.cmd.verify_otp` | Driver → trip-service |
+| `trip.event.otp_failed` / `otp_verified` | Driver |
+| `trip.event.started` | Rider (after OTP) |
+| `trip.cmd.cancel` | Rider (pre-start) |
+| `payment.event.session_created` | Rider checkout |
+| `payment.event.success` | Marks trip `payed` |
 
 ## Quick start
 
 ```bash
-docker compose --env-file .env.example up --build
-# Rider: http://localhost:3000 → I Need a Ride
-# Driver (optional): I Want to Drive → Sedan
+docker compose up --build -d
+# Rider:  http://localhost:3000
+# Driver: http://localhost:3001  (register → Go Online)
+# E2E:    node scripts/e2e-otp-trip-test.mjs
 ```
 
-See [local-e2e-test.md](./local-e2e-test.md) § Simulation D for a step-by-step checklist.
+Payment: local mock sessions (`cs_test_local_*`) use the in-app card form and `POST /payment/mock-success`. Real Stripe Checkout is used when valid Stripe keys are configured.

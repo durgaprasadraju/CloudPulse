@@ -11,6 +11,7 @@ on:
       - "go.sum"
       - "Dockerfile"
       - "web/**"
+      - "web-driver/**"
       - "charts/cloudpulse/**"
       - ".github/workflows/ci-cd.yaml"
   # Note: gitops/values updates are committed by CI and intentionally excluded
@@ -22,7 +23,11 @@ on:
         type: boolean
         default: true
       force_frontend:
-        description: "Force rebuild frontend"
+        description: "Force rebuild rider frontend"
+        type: boolean
+        default: true
+      force_driver_frontend:
+        description: "Force rebuild driver frontend"
         type: boolean
         default: true
 
@@ -37,6 +42,8 @@ permissions:
 env:
   BACKEND_IMAGE: cloudpulse-api-gateway
   FRONTEND_IMAGE: cloudpulse-web
+  DRIVER_FRONTEND_IMAGE: cloudpulse-web-driver
+  DRIVER_SERVICE_IMAGE: cloudpulse-driver-service
   GITOPS_VALUES: gitops/cloudpulse/values-production.yaml
 
 jobs:
@@ -46,6 +53,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      driver_frontend: ${{ steps.filter.outputs.driver_frontend }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v4
@@ -60,9 +68,11 @@ jobs:
               - 'Dockerfile'
             frontend:
               - 'web/**'
+            driver_frontend:
+              - 'web-driver/**'
 
   build-backend:
-    name: Build & push Go backend
+    name: Build & push Go backend + driver-service
     needs: changes
     if: >-
       needs.changes.outputs.backend == 'true' ||
@@ -71,6 +81,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.version }}
       image_repo: ${{ steps.meta.outputs.image_repo }}
+      driver_image_repo: ${{ steps.meta.outputs.driver_image_repo }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -89,11 +100,14 @@ jobs:
         run: |
           SHORT_SHA="${GITHUB_SHA::12}"
           REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE }}"
+          DRIVER_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DRIVER_SERVICE_IMAGE }}"
           echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "image_repo=${REPO}" >> "$GITHUB_OUTPUT"
+          echo "driver_image_repo=${DRIVER_REPO}" >> "$GITHUB_OUTPUT"
           echo "tags=${REPO}:${SHORT_SHA},${REPO}:latest" >> "$GITHUB_OUTPUT"
+          echo "driver_tags=${DRIVER_REPO}:${SHORT_SHA},${DRIVER_REPO}:latest" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
+      - name: Build and push API gateway
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -106,8 +120,21 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+      - name: Build and push driver-service
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            SERVICE=driver-service
+          tags: ${{ steps.meta.outputs.driver_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
   build-frontend:
-    name: Build & push React frontend
+    name: Build & push rider frontend
     needs: changes
     if: >-
       needs.changes.outputs.frontend == 'true' ||
@@ -153,14 +180,59 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64
 
+  build-driver-frontend:
+    name: Build & push driver frontend
+    needs: changes
+    if: >-
+      needs.changes.outputs.driver_frontend == 'true' ||
+      github.event_name == 'workflow_dispatch' && inputs.force_driver_frontend
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_repo: ${{ steps.meta.outputs.image_repo }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DRIVER_FRONTEND_IMAGE }}"
+          echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_repo=${REPO}" >> "$GITHUB_OUTPUT"
+          echo "tags=${REPO}:${SHORT_SHA},${REPO}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./web-driver
+          file: ./web-driver/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://api.cloudpulse.live
+            NEXT_PUBLIC_WEBSOCKET_URL=wss://api.cloudpulse.live/ws
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
   gitops:
     name: Update GitOps values (ArgoCD)
-    needs: [build-backend, build-frontend]
-    # Run if at least one build succeeded (skip when both were skipped)
+    needs: [build-backend, build-frontend, build-driver-frontend]
     if: |
       always() &&
-      (needs.build-backend.result == 'success' || needs.build-frontend.result == 'success') &&
-      (needs.build-backend.result != 'failure' && needs.build-frontend.result != 'failure')
+      (needs.build-backend.result == 'success' || needs.build-frontend.result == 'success' || needs.build-driver-frontend.result == 'success') &&
+      (needs.build-backend.result != 'failure' && needs.build-frontend.result != 'failure' && needs.build-driver-frontend.result != 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -178,29 +250,38 @@ jobs:
         env:
           BACKEND_RESULT: ${{ needs.build-backend.result }}
           FRONTEND_RESULT: ${{ needs.build-frontend.result }}
+          DRIVER_FRONTEND_RESULT: ${{ needs.build-driver-frontend.result }}
           BACKEND_TAG: ${{ needs.build-backend.outputs.image_tag }}
           FRONTEND_TAG: ${{ needs.build-frontend.outputs.image_tag }}
-          BACKEND_REPO: ${{ needs.build-backend.outputs.image_repo }}
-          FRONTEND_REPO: ${{ needs.build-frontend.outputs.image_repo }}
+          DRIVER_FRONTEND_TAG: ${{ needs.build-driver-frontend.outputs.image_tag }}
           DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
           set -euo pipefail
           FILE="${{ env.GITOPS_VALUES }}"
 
-          # Ensure Docker Hub username is reflected in repositories
           yq -i ".backend.image.repository = \"${DOCKERHUB_USER}/${{ env.BACKEND_IMAGE }}\"" "$FILE"
           yq -i ".frontend.image.repository = \"${DOCKERHUB_USER}/${{ env.FRONTEND_IMAGE }}\"" "$FILE"
+          yq -i ".driverFrontend.image.repository = \"${DOCKERHUB_USER}/${{ env.DRIVER_FRONTEND_IMAGE }}\"" "$FILE"
 
           if [ "$BACKEND_RESULT" = "success" ]; then
             yq -i ".backend.image.tag = \"${BACKEND_TAG}\"" "$FILE"
             yq -i '.backend.image.pullPolicy = "Always"' "$FILE"
-            echo "Updated backend → ${DOCKERHUB_USER}/${{ env.BACKEND_IMAGE }}:${BACKEND_TAG}"
+            yq -i ".microservices.driver-service.image.repository = \"${DOCKERHUB_USER}/${{ env.DRIVER_SERVICE_IMAGE }}\"" "$FILE"
+            yq -i ".microservices.driver-service.image.tag = \"${BACKEND_TAG}\"" "$FILE"
+            yq -i '.microservices.driver-service.image.pullPolicy = "Always"' "$FILE"
+            echo "Updated backend + driver-service → ${BACKEND_TAG}"
           fi
 
           if [ "$FRONTEND_RESULT" = "success" ]; then
             yq -i ".frontend.image.tag = \"${FRONTEND_TAG}\"" "$FILE"
             yq -i '.frontend.image.pullPolicy = "Always"' "$FILE"
-            echo "Updated frontend → ${DOCKERHUB_USER}/${{ env.FRONTEND_IMAGE }}:${FRONTEND_TAG}"
+            echo "Updated frontend → ${FRONTEND_TAG}"
+          fi
+
+          if [ "$DRIVER_FRONTEND_RESULT" = "success" ]; then
+            yq -i ".driverFrontend.image.tag = \"${DRIVER_FRONTEND_TAG}\"" "$FILE"
+            yq -i '.driverFrontend.image.pullPolicy = "Always"' "$FILE"
+            echo "Updated driver frontend → ${DRIVER_FRONTEND_TAG}"
           fi
 
           echo "---- ${FILE} ----"
@@ -223,7 +304,6 @@ jobs:
           Triggered by CI after Docker Hub push.
           ArgoCD will sync this change into the EKS cluster."
 
-          # Retry push in case of concurrent bot commits
           for i in 1 2 3; do
             git pull --rebase origin main && git push origin HEAD:main && break
             sleep 3

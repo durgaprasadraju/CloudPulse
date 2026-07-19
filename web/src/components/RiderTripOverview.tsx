@@ -8,29 +8,48 @@ import { TripOverviewCard } from "./TripOverviewCard"
 import { DriverCard } from "./DriverCard"
 import { TripEvents, PaymentEventSessionCreatedData } from "../contracts"
 import { MockPaymentModal } from "./MockPaymentModal"
+import { TripOtpCard } from "./TripOtpCard"
+import { PhonePePaymentButton } from "./PhonePePaymentButton"
+import { StripePaymentButton } from "./StripePaymentButton"
+import { TripFeedbackForm } from "./TripFeedbackForm"
 
 interface TripOverviewProps {
   trip: TripPreview | null;
   status: TripEvents | null;
   assignedDriver?: Driver | null;
   paymentSession?: PaymentEventSessionCreatedData | null;
+  pickupOTP?: string | null;
   pickupLabel?: string;
   dropoffLabel?: string;
+  userID?: string;
+  awaitingFeedback?: boolean;
   onPackageSelect: (carPackage: RouteFare) => void;
   onCancel: () => void;
   onPaymentDone?: () => void;
+  onFeedbackDone?: () => void;
 }
+
+const canCancelBeforeStart = (status: TripEvents | null) =>
+  status === TripEvents.Created ||
+  status === TripEvents.DriverAssigned ||
+  status === TripEvents.DriverEnRoute ||
+  status === TripEvents.DriverArrived ||
+  Boolean(status === null);
 
 export const RiderTripOverview = ({
   trip,
   status,
   assignedDriver,
   paymentSession,
+  pickupOTP,
   pickupLabel,
   dropoffLabel,
+  userID,
+  awaitingFeedback,
   onPackageSelect,
   onCancel,
   onPaymentDone,
+  onFeedbackDone,
 }: TripOverviewProps) => {
   if (!trip) {
     return (
@@ -48,21 +67,52 @@ export const RiderTripOverview = ({
     )
   }
 
+  if (awaitingFeedback && trip.tripID) {
+    return (
+      <TripOverviewCard
+        title="How was your ride?"
+        description="Your payment went through — leave a quick rating for your driver."
+      >
+        <TripFeedbackForm
+          tripID={trip.tripID}
+          userID={userID ?? ""}
+          onSubmitted={() => {}}
+          onSkip={() => onFeedbackDone?.()}
+        />
+      </TripOverviewCard>
+    )
+  }
+
   if (status === TripEvents.PaymentSessionCreated && paymentSession) {
+    const isLocalMock =
+      paymentSession.sessionID?.startsWith("pp_test_local_") ||
+      paymentSession.sessionID?.startsWith("cs_test_local_")
+    const isPhonePe =
+      paymentSession.provider === "phonepe" ||
+      Boolean(paymentSession.checkoutURL) ||
+      paymentSession.sessionID?.startsWith("pp_")
     return (
       <TripOverviewCard
         title="Trip complete — pay your fare"
-        description="Review the fare and complete mock checkout"
+        description="Review the fare and complete checkout"
       >
         <div className="flex flex-col gap-4">
           <DriverCard driver={assignedDriver} />
-          <MockPaymentModal
-            paymentSession={paymentSession}
-            driverName={assignedDriver?.name}
-            distanceMeters={trip.distance}
-            durationSeconds={trip.duration}
-            onPaid={() => onPaymentDone?.()}
-          />
+          {isLocalMock ? (
+            <MockPaymentModal
+              paymentSession={paymentSession}
+              driverName={assignedDriver?.name}
+              distanceMeters={trip.distance}
+              durationSeconds={trip.duration}
+              driverID={assignedDriver?.id}
+              userID={userID}
+              onPaid={() => onPaymentDone?.()}
+            />
+          ) : isPhonePe ? (
+            <PhonePePaymentButton paymentSession={paymentSession} />
+          ) : (
+            <StripePaymentButton paymentSession={paymentSession} />
+          )}
         </div>
       </TripOverviewCard>
     )
@@ -122,28 +172,32 @@ export const RiderTripOverview = ({
     )
   }
 
-  if (status === TripEvents.DriverArrived) {
-    return (
-      <TripOverviewCard
-        title="Driver has arrived"
-        description="Meet your driver at the pickup point."
-      >
-        <DriverCard driver={assignedDriver} />
-      </TripOverviewCard>
-    )
-  }
+  if (
+    status === TripEvents.DriverAssigned ||
+    status === TripEvents.DriverEnRoute ||
+    status === TripEvents.DriverArrived
+  ) {
+    const title =
+      status === TripEvents.DriverAssigned
+        ? "Driver assigned"
+        : status === TripEvents.DriverEnRoute
+          ? "Driver is coming"
+          : "Driver has arrived"
+    const description =
+      status === TripEvents.DriverArrived
+        ? "Share the OTP below so your driver can start the trip."
+        : "Share the OTP with your driver when they arrive."
 
-  if (status === TripEvents.DriverEnRoute || status === TripEvents.DriverAssigned) {
     return (
-      <TripOverviewCard
-        title={status === TripEvents.DriverAssigned ? "Driver assigned" : "Driver is coming"}
-        description="Your driver is heading to the pickup location."
-      >
+      <TripOverviewCard title={title} description={description}>
         <div className="flex flex-col gap-3">
           <DriverCard driver={assignedDriver} />
-          <Button variant="destructive" className="w-full" onClick={onCancel}>
-            Cancel trip
-          </Button>
+          {pickupOTP && <TripOtpCard otp={pickupOTP} driverName={assignedDriver?.name} />}
+          {canCancelBeforeStart(status) && (
+            <Button variant="destructive" className="w-full" onClick={onCancel}>
+              Cancel trip
+            </Button>
+          )}
         </div>
       </TripOverviewCard>
     )

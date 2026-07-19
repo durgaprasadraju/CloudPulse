@@ -18,10 +18,7 @@ type TripConsumer struct {
 }
 
 func NewTripConsumer(rabbitmq *messaging.RabbitMQ, service domain.Service) *TripConsumer {
-	return &TripConsumer{
-		rabbitmq: rabbitmq,
-		service:  service,
-	}
+	return &TripConsumer{rabbitmq: rabbitmq, service: service}
 }
 
 func (c *TripConsumer) Listen() error {
@@ -40,18 +37,17 @@ func (c *TripConsumer) Listen() error {
 
 		switch msg.RoutingKey {
 		case contracts.PaymentCmdCreateSession:
-			if err := c.handleTripAccepted(ctx, payload); err != nil {
-				log.Printf("Failed to handle trip accepted: %v", err)
+			if err := c.handleCreateSession(ctx, payload); err != nil {
+				log.Printf("Failed to handle create session: %v", err)
 				return err
 			}
 		}
-
 		return nil
 	})
 }
 
-func (c *TripConsumer) handleTripAccepted(ctx context.Context, payload messaging.PaymentTripResponseData) error {
-	log.Printf("Handling trip accepted by driver: %s", payload.TripID)
+func (c *TripConsumer) handleCreateSession(ctx context.Context, payload messaging.PaymentTripResponseData) error {
+	log.Printf("Creating payment session for trip: %s", payload.TripID)
 
 	paymentSession, err := c.service.CreatePaymentSession(
 		ctx,
@@ -66,19 +62,19 @@ func (c *TripConsumer) handleTripAccepted(ctx context.Context, payload messaging
 		return err
 	}
 
-	log.Printf("Payment session created: %s", paymentSession.StripeSessionID)
+	log.Printf("Payment session created: %s provider=%s", paymentSession.SessionID, paymentSession.Provider)
 
-	// Publish payment session created event
 	paymentPayload := messaging.PaymentEventSessionCreatedData{
-		TripID:    payload.TripID,
-		SessionID: paymentSession.StripeSessionID,
-		Amount:    float64(paymentSession.Amount) / 100.0, // Convert from cents to dollars
-		Currency:  paymentSession.Currency,
+		TripID:      payload.TripID,
+		SessionID:   paymentSession.SessionID,
+		Amount:      float64(paymentSession.Amount),
+		Currency:    paymentSession.Currency,
+		Provider:    paymentSession.Provider,
+		CheckoutURL: paymentSession.CheckoutURL,
 	}
 
 	payloadBytes, err := json.Marshal(paymentPayload)
 	if err != nil {
-		log.Printf("Failed to marshal payment session payload: %v", err)
 		return err
 	}
 
@@ -88,7 +84,6 @@ func (c *TripConsumer) handleTripAccepted(ctx context.Context, payload messaging
 			Data:    payloadBytes,
 		},
 	); err != nil {
-		log.Printf("Failed to publish payment session created event: %v", err)
 		return err
 	}
 

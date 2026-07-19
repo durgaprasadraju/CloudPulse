@@ -2,21 +2,18 @@
 
 import { useState } from "react";
 import { Button } from "./ui/button";
-import { PaymentEventSessionCreatedData } from "../contracts";
+import { PaymentEventSessionCreatedData, BackendEndpoints } from "../contracts";
+import { formatMoney } from "../utils/money";
+import { API_URL } from "../constants";
 
 interface MockPaymentModalProps {
   paymentSession: PaymentEventSessionCreatedData;
   driverName?: string;
   distanceMeters?: number;
   durationSeconds?: number;
+  driverID?: string;
+  userID?: string;
   onPaid: () => void;
-}
-
-function formatAmount(amount: number, currency: string) {
-  // Backend stores fare as totalPriceInCents in some paths, dollars in others.
-  // Local mock sessions use the raw number from the fare model.
-  const display = amount > 1000 ? (amount / 100).toFixed(2) : amount.toFixed(2);
-  return `${currency} ${display}`;
 }
 
 export function MockPaymentModal({
@@ -24,25 +21,47 @@ export function MockPaymentModal({
   driverName,
   distanceMeters,
   durationSeconds,
+  driverID,
+  userID,
   onPaid,
 }: MockPaymentModalProps) {
   const [card, setCard] = useState("4242 4242 4242 4242");
   const [exp, setExp] = useState("12/28");
   const [cvc, setCvc] = useState("123");
   const [paying, setPaying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handlePay = async () => {
     setPaying(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setPaying(false);
-    onPaid();
+    setError(null);
+    try {
+      const res = await fetch(`${API_URL}${BackendEndpoints.MOCK_PAYMENT_SUCCESS}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tripID: paymentSession.tripID,
+          sessionID: paymentSession.sessionID,
+          userID: userID ?? "",
+          driverID: driverID ?? "",
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Payment failed");
+      }
+      onPaid();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Payment failed");
+    } finally {
+      setPaying(false);
+    }
   };
 
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-lg border bg-slate-50 p-3 text-sm space-y-1">
         <p className="font-semibold text-base">
-          {formatAmount(paymentSession.amount, paymentSession.currency)}
+          {formatMoney(paymentSession.amount, paymentSession.currency)}
         </p>
         {driverName && <p className="text-gray-600">Driver: {driverName}</p>}
         {distanceMeters != null && (
@@ -79,11 +98,12 @@ export function MockPaymentModal({
             />
           </div>
         </div>
-        <p className="text-xs text-gray-400">Demo checkout — no real charge is made.</p>
+        <p className="text-xs text-gray-400">Demo PhonePe checkout — no real charge is made.</p>
+        {error && <p className="text-xs text-red-600">{error}</p>}
       </div>
 
       <Button onClick={handlePay} disabled={paying} className="w-full">
-        {paying ? "Processing…" : `Pay ${formatAmount(paymentSession.amount, paymentSession.currency)}`}
+        {paying ? "Processing…" : `Pay ${formatMoney(paymentSession.amount, paymentSession.currency)}`}
       </Button>
     </div>
   );

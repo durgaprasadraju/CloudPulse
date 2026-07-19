@@ -34,7 +34,6 @@ func (c *lifecycleConsumer) Listen() error {
 
 		var payload messaging.TripEventData
 		if err := json.Unmarshal(message.Data, &payload); err != nil {
-			// cancel may send a minimal payload
 			var cancelPayload struct {
 				TripID string `json:"tripID"`
 				Status string `json:"status"`
@@ -43,8 +42,8 @@ func (c *lifecycleConsumer) Listen() error {
 				log.Printf("lifecycle: unmarshal payload: %v", err)
 				return err
 			}
-			if cancelPayload.TripID != "" {
-				return c.service.UpdateTrip(ctx, cancelPayload.TripID, "cancelled", nil)
+			if cancelPayload.TripID != "" && msg.RoutingKey == contracts.TripEventCancelled {
+				_, _ = c.service.CancelTrip(ctx, cancelPayload.TripID, message.OwnerID)
 			}
 			return nil
 		}
@@ -53,9 +52,15 @@ func (c *lifecycleConsumer) Listen() error {
 			return nil
 		}
 
-		status := payload.Trip.Status
+		status := statusFromRoutingKey(msg.RoutingKey)
 		if status == "" {
-			status = statusFromRoutingKey(msg.RoutingKey)
+			return nil
+		}
+
+		// Started is only allowed via OTP verification — ignore forged client events.
+		if msg.RoutingKey == contracts.TripEventStarted {
+			log.Printf("lifecycle: ignoring client-originated started for trip %s (OTP required)", payload.Trip.Id)
+			return nil
 		}
 
 		var driver *pbd.Driver
@@ -68,13 +73,26 @@ func (c *lifecycleConsumer) Listen() error {
 			}
 		}
 
-		if err := c.service.UpdateTrip(ctx, payload.Trip.Id, status, driver); err != nil {
-			log.Printf("lifecycle: update trip %s -> %s: %v", payload.Trip.Id, status, err)
-			return err
+		if msg.RoutingKey == contracts.TripEventCancelled {
+			_, err := c.service.CancelTrip(ctx, payload.Trip.Id, message.OwnerID)
+			if err != nil {
+				log.Printf("lifecycle: cancel trip %s: %v", payload.Trip.Id, err)
+			}
+			return nil
 		}
 
 		if msg.RoutingKey == contracts.TripEventCompleted {
-			return c.createPaymentSession(ctx, payload.Trip.Id)
+			trip, err := c.service.CompleteTrip(ctx, payload.Trip.Id)
+			if err != nil {
+				log.Printf("lifecycle: complete trip %s: %v", payload.Trip.Id, err)
+				return nil
+			}
+			return c.createPaymentSession(ctx, trip.ID.Hex())
+		}
+
+		if _, err := c.service.TransitionTrip(ctx, payload.Trip.Id, status, driver); err != nil {
+			log.Printf("lifecycle: update trip %s -> %s: %v", payload.Trip.Id, status, err)
+			return nil
 		}
 		return nil
 	})
@@ -93,7 +111,7 @@ func statusFromRoutingKey(key string) string {
 	case contracts.TripEventCancelled:
 		return "cancelled"
 	default:
-		return "accepted"
+		return ""
 	}
 }
 
@@ -101,6 +119,10 @@ func (c *lifecycleConsumer) createPaymentSession(ctx context.Context, tripID str
 	trip, err := c.service.GetTripByID(ctx, tripID)
 	if err != nil || trip == nil {
 		return err
+	}
+	if trip.Status != "completed" && trip.Status != "payed" {
+		log.Printf("lifecycle: skip payment for trip %s status=%s", tripID, trip.Status)
+		return nil
 	}
 
 	driverID := ""
@@ -118,7 +140,7 @@ func (c *lifecycleConsumer) createPaymentSession(ctx context.Context, tripID str
 		UserID:   trip.UserID,
 		DriverID: driverID,
 		Amount:   amount,
-		Currency: "USD",
+		Currency: "INR",
 	})
 	if err != nil {
 		return err

@@ -37,13 +37,7 @@ func (c *paymentConsumer) Listen() error {
 			return err
 		}
 
-		log.Printf("Trip has been completed and payed.")
-
-		return c.service.UpdateTrip(
-			ctx,
-			payload.TripID,
-			"payed",
-			nil,
-		)
+		log.Printf("Trip payment success for %s", payload.TripID)
+		return c.service.MarkPaid(ctx, payload.TripID)
 	})
 }

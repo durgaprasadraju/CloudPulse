@@ -2,6 +2,7 @@ import { Button } from "./ui/button"
 import { Clock } from 'lucide-react'
 import { RouteFare, TripPreview } from '../types'
 import { convertMetersToKilometers, convertSecondsToMinutes } from "../utils/math"
+import { formatMoney } from "../utils/money"
 import { cn } from "../lib/utils"
 import { PackagesMeta } from "./PackagesMeta"
 
@@ -25,7 +26,7 @@ export function DriverList({ trip, onPackageSelect, onCancel }: DriverListProps)
         <div className="space-y-4">
           {trip?.rideFares.map((fare) => {
             const Icon = PackagesMeta[fare.packageSlug].icon;
-            const price = fare.totalPriceInCents && `$${(fare.totalPriceInCents / 100).toFixed(2)}`
+            const price = fare.totalPriceInCents != null && formatMoney(fare.totalPriceInCents, "INR")
 
             return (
               <div

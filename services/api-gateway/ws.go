@@ -69,8 +69,8 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Default SF center until the rider sends their location
-	riderLat, riderLon := 37.7749, -122.4194
+	// Default Hyderabad (Madhapur) until the rider sends their location
+	riderLat, riderLon := 17.4401, 78.3915
 
 	// Periodically push nearby drivers to this rider
 	go func() {
@@ -121,14 +121,16 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging
 				TripID string `json:"tripID"`
 			}
 			_ = json.Unmarshal(msg.Data, &cancelData)
-			payload, _ := json.Marshal(map[string]string{
-				"tripID": cancelData.TripID,
-				"status": "cancelled",
+			payload, _ := json.Marshal(messaging.TripCancelData{
+				TripID: cancelData.TripID,
+				UserID: userID,
 			})
-			_ = rb.PublishMessage(ctx, contracts.TripEventCancelled, contracts.AmqpMessage{
+			if err := rb.PublishMessage(ctx, contracts.TripCmdCancel, contracts.AmqpMessage{
 				OwnerID: userID,
 				Data:    payload,
-			})
+			}); err != nil {
+				log.Printf("Error publishing cancel: %v", err)
+			}
 		default:
 			log.Printf("Received rider message type=%s", msg.Type)
 		}
@@ -175,6 +177,18 @@ func pushNearbyDrivers(ctx context.Context, userID string, locations *tracking.L
 }
 
 func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ, locations *tracking.LocationStore) {
+	userID, packageSlug, err := resolveDriverIdentity(r)
+	if err != nil {
+		log.Printf("Driver WS auth failed: %v", err)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if packageSlug == "" {
+		log.Println("No package slug provided")
+		http.Error(w, "packageSlug required", http.StatusBadRequest)
+		return
+	}
+
 	conn, err := connManager.Upgrade(w, r)
 	if err != nil {
 		log.Printf("WebSocket upgrade failed: %v", err)
@@ -182,18 +196,6 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 	}
 
 	defer conn.Close()
-
-	userID := r.URL.Query().Get("userID")
-	if userID == "" {
-		log.Println("No user ID provided")
-		return
-	}
-
-	packageSlug := r.URL.Query().Get("packageSlug")
-	if packageSlug == "" {
-		log.Println("No package slug provided")
-		return
-	}
 
 	connManager.Add(userID, conn)
 
@@ -217,7 +219,7 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 		}
 
 		driverService.Close()
-		log.Println("Driver unregistered: ", userID)
+		log.Println("Driver offline: ", userID)
 	}()
 
 	driverData, err := driverService.Client.RegisterDriver(ctx, &driver.RegisterDriverRequest{
@@ -239,6 +241,7 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 
 	queues := []string{
 		messaging.DriverCmdTripRequestQueue,
+		messaging.NotifyDriverControlQueue,
 	}
 
 	for _, q := range queues {
@@ -294,11 +297,42 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 				log.Printf("Error updating driver location in Redis: %v", err)
 			}
 		case contracts.DriverCmdTripAccept, contracts.DriverCmdTripDecline:
+			var tripMeta struct {
+				TripID string `json:"tripID"`
+			}
+			_ = json.Unmarshal(driverMsg.Data, &tripMeta)
+			notifyDriverOfferResponse(userID, tripMeta.TripID, driverMsg.Type == contracts.DriverCmdTripAccept)
+
 			if err := rb.PublishMessage(ctx, driverMsg.Type, contracts.AmqpMessage{
 				OwnerID: userID,
 				Data:    driverMsg.Data,
 			}); err != nil {
 				log.Printf("Error publishing message to RabbitMQ: %v", err)
+			}
+		case contracts.TripCmdVerifyOTP:
+			var otpMsg struct {
+				TripID  string `json:"tripID"`
+				OTP     string `json:"otp"`
+				RiderID string `json:"riderID"`
+			}
+			if err := json.Unmarshal(driverMsg.Data, &otpMsg); err != nil {
+				log.Printf("Error unmarshaling OTP verify: %v", err)
+				continue
+			}
+			payload, err := json.Marshal(messaging.TripVerifyOTPData{
+				TripID:   otpMsg.TripID,
+				OTP:      otpMsg.OTP,
+				RiderID:  otpMsg.RiderID,
+				DriverID: userID,
+			})
+			if err != nil {
+				continue
+			}
+			if err := rb.PublishMessage(ctx, contracts.TripCmdVerifyOTP, contracts.AmqpMessage{
+				OwnerID: userID,
+				Data:    payload,
+			}); err != nil {
+				log.Printf("Error publishing OTP verify: %v", err)
 			}
 		case contracts.TripCmdStatus:
 			var statusMsg struct {
@@ -314,9 +348,31 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 			if event == "" {
 				continue
 			}
+			// Trip start is gated by OTP verification — never accept a forged started event.
+			if event == contracts.TripEventStarted {
+				log.Printf("Ignoring client-originated trip.event.started from driver %s", userID)
+				continue
+			}
+			allowed := event == contracts.TripEventDriverEnRoute ||
+				event == contracts.TripEventDriverArrived ||
+				event == contracts.TripEventCompleted
+			if !allowed {
+				log.Printf("Ignoring unsupported trip status event %s from driver %s", event, userID)
+				continue
+			}
+			if event == contracts.TripEventCompleted {
+				notifyDriverOfferResponse(userID, "", false)
+			}
+			wrapped, err := json.Marshal(struct {
+				Trip json.RawMessage `json:"trip"`
+			}{Trip: statusMsg.Trip})
+			if err != nil {
+				log.Printf("Error wrapping trip status payload: %v", err)
+				continue
+			}
 			if err := rb.PublishMessage(ctx, event, contracts.AmqpMessage{
 				OwnerID: statusMsg.RiderID,
-				Data:    statusMsg.Trip,
+				Data:    wrapped,
 			}); err != nil {
 				log.Printf("Error publishing trip status: %v", err)
 			}

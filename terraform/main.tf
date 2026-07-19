@@ -105,6 +105,8 @@ module "dns" {
   create_hosted_zone = var.create_hosted_zone
   hosted_zone_id     = var.hosted_zone_id
 
+  extra_subject_alternative_names = ["driver.${var.domain_name}"]
+
   # Leave empty on first apply. After ALB exists (Ingress), set:
   #   alb_dns_name = "k8s-....elb.amazonaws.com"
   #   alb_zone_id  = "Z...."   # ALB's Route 53 hosted zone ID (not your domain zone)

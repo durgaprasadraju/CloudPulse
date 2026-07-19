@@ -15,14 +15,10 @@ type paymentService struct {
 	paymentProcessor domain.PaymentProcessor
 }
 
-// NewPaymentService creates a new instance of the payment service
 func NewPaymentService(paymentProcessor domain.PaymentProcessor) domain.Service {
-	return &paymentService{
-		paymentProcessor: paymentProcessor,
-	}
+	return &paymentService{paymentProcessor: paymentProcessor}
 }
 
-// CreatePaymentSession creates a new payment session for a trip
 func (s *paymentService) CreatePaymentSession(
 	ctx context.Context,
 	tripID string,
@@ -37,21 +33,21 @@ func (s *paymentService) CreatePaymentSession(
 		"driver_id": driverID,
 	}
 
-	sessionID, err := s.paymentProcessor.CreatePaymentSession(ctx, amount, currency, metadata)
+	session, err := s.paymentProcessor.CreatePaymentSession(ctx, amount, currency, metadata)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create payment session: %w", err)
 	}
 
-	paymentIntent := &types.PaymentIntent{
-		ID:              uuid.New().String(),
-		TripID:          tripID,
-		UserID:          userID,
-		DriverID:        driverID,
-		Amount:          amount,
-		Currency:        currency,
-		StripeSessionID: sessionID,
-		CreatedAt:       time.Now(),
-	}
-
-	return paymentIntent, nil
+	return &types.PaymentIntent{
+		ID:          uuid.New().String(),
+		TripID:      tripID,
+		UserID:      userID,
+		DriverID:    driverID,
+		Amount:      amount,
+		Currency:    currency,
+		SessionID:   session.SessionID,
+		Provider:    session.Provider,
+		CheckoutURL: session.CheckoutURL,
+		CreatedAt:   time.Now(),
+	}, nil
 }

@@ -9,6 +9,7 @@ import { MapClickHandler } from './MapClickHandler';
 import { RouteFare, RequestRideProps, TripPreview, HTTPTripStartResponse, Coordinate } from "../types";
 import { RoutingControl } from "./RoutingControl";
 import { API_URL } from '../constants';
+import { DEFAULT_LOCATION } from '../constants/location';
 import { RiderTripOverview } from './RiderTripOverview';
 import { BackendEndpoints, HTTPTripPreviewRequestPayload, HTTPTripPreviewResponse, HTTPTripStartRequestPayload, TripEvents } from '../contracts';
 
@@ -52,11 +53,13 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
     const [trip, setTrip] = useState<TripPreview | null>(null)
     const [destination, setDestination] = useState<[number, number] | null>(null)
     const [pickup, setPickup] = useState<Coordinate>({
-        latitude: 37.7749,
-        longitude: -122.4194,
+        latitude: DEFAULT_LOCATION.latitude,
+        longitude: DEFAULT_LOCATION.longitude,
     });
     const [settingPickup, setSettingPickup] = useState(false);
     const [paid, setPaid] = useState(false);
+    const [awaitingFeedback, setAwaitingFeedback] = useState(false);
+    const [feedbackTripID, setFeedbackTripID] = useState<string | null>(null);
     const mapRef = useRef<L.Map>(null)
     const userID = useMemo(() => crypto.randomUUID(), [])
     const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -67,6 +70,7 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
         tripStatus,
         assignedDriver,
         paymentSession,
+        pickupOTP,
         resetTripStatus,
         cancelTrip,
     } = useRiderStreamConnection(pickup, userID);
@@ -99,7 +103,7 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
                 })
 
                 const parsedRoute = data.route.geometry[0].coordinates
-                    .map((coord) => [coord.longitude, coord.latitude] as [number, number])
+                    .map((coord) => [coord.latitude, coord.longitude] as [number, number])
 
                 setTrip({
                     tripID: "",
@@ -167,20 +171,39 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
     }
 
     const handleCancelTrip = () => {
-        if (trip?.tripID) {
+        if (trip?.tripID && tripStatus !== TripEvents.Cancelled) {
             cancelTrip(trip.tripID)
+            // Keep UI until cancelled event arrives (or user books again from cancelled screen).
+            if (
+                tripStatus === TripEvents.DriverAssigned ||
+                tripStatus === TripEvents.DriverEnRoute ||
+                tripStatus === TripEvents.DriverArrived ||
+                tripStatus === TripEvents.Created
+            ) {
+                return
+            }
         }
         setTrip(null)
         setDestination(null)
         setPaid(false)
+        setAwaitingFeedback(false)
+        setFeedbackTripID(null)
         resetTripStatus()
     }
 
     const handlePaymentDone = () => {
         setPaid(true)
+        setAwaitingFeedback(true)
+        setFeedbackTripID(trip?.tripID ?? paymentSession?.tripID ?? null)
+        resetTripStatus()
+    }
+
+    const handleFeedbackDone = () => {
+        setAwaitingFeedback(false)
+        setFeedbackTripID(null)
         setTrip(null)
         setDestination(null)
-        resetTripStatus()
+        setPaid(false)
     }
 
     // Prefer live assigned-driver marker from nearby stream when IDs match
@@ -285,15 +308,23 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
 
             <div className="flex-[0.4] overflow-y-auto">
                 <RiderTripOverview
-                    trip={trip}
+                    trip={
+                        awaitingFeedback && feedbackTripID
+                            ? { ...(trip ?? { tripID: feedbackTripID, route: [], rideFares: [], distance: 0, duration: 0 }), tripID: feedbackTripID }
+                            : trip
+                    }
                     assignedDriver={assignedDriver}
-                    status={paid ? TripEvents.Completed : tripStatus}
+                    status={paid && !awaitingFeedback ? TripEvents.Completed : tripStatus}
                     paymentSession={paymentSession}
+                    pickupOTP={pickupOTP}
                     pickupLabel={fmtCoord(pickup)}
                     dropoffLabel={destination ? `${destination[0].toFixed(4)}, ${destination[1].toFixed(4)}` : undefined}
+                    userID={userID}
+                    awaitingFeedback={awaitingFeedback}
                     onPackageSelect={handleStartTrip}
                     onCancel={handleCancelTrip}
                     onPaymentDone={handlePaymentDone}
+                    onFeedbackDone={handleFeedbackDone}
                 />
             </div>
         </div>

@@ -1,6 +1,7 @@
 import { PaymentEventSessionCreatedData } from "../contracts"
 import { Button } from "./ui/button"
 import { loadStripe } from "@stripe/stripe-js"
+import { formatMoney } from "../utils/money"
 
 interface StripePaymentButtonProps {
   paymentSession: PaymentEventSessionCreatedData
@@ -68,8 +69,8 @@ export const StripePaymentButton = ({
       {isLoading
         ? "Loading..."
         : isLocalPaymentSession(paymentSession.sessionID)
-          ? `Pay ${paymentSession.amount} ${paymentSession.currency} (local)`
-          : `Pay ${paymentSession.amount} ${paymentSession.currency}`}
+          ? `Pay ${formatMoney(paymentSession.amount, paymentSession.currency)} (local)`
+          : `Pay ${formatMoney(paymentSession.amount, paymentSession.currency)}`}
     </Button>
   )
 }

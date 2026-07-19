@@ -4,10 +4,11 @@
 # (or:    cp .env.example .env && docker compose up --build)
 #
 # URLs:
-#   Map UI (rider/driver):  http://localhost:3000
-#   API Gateway:            http://localhost:8080
-#   RabbitMQ management:    http://localhost:15672  (guest/guest)
-#   Jaeger UI:              http://localhost:16686
+#   Rider app:               http://localhost:3000
+#   Driver app:              http://localhost:3001
+#   API Gateway:             http://localhost:8080
+#   RabbitMQ management:     http://localhost:15672  (guest/guest)
+#   Jaeger UI:               http://localhost:16686
 #
 # Note: This ride-sharing codebase uses MongoDB + RabbitMQ today.
 # Redis and PostgreSQL are included for the CloudPulse.live prototype
@@ -104,13 +105,20 @@ services:
       RABBITMQ_URI: ${RABBITMQ_URI:-amqp://guest:guest@rabbitmq:5672/}
       OSRM_API: ${OSRM_API:-https://router.project-osrm.org}
       JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
+      DRIVER_SERVICE_HTTP_URL: ${DRIVER_SERVICE_HTTP_URL:-http://driver-service:8085}
+      JWT_SECRET: ${JWT_SECRET:-cloudpulse-dev-jwt-secret-change-me}
+      DATABASE_URL: ${DATABASE_URL:-postgres://cloudpulse:cloudpulse@postgres:5432/cloudpulse?sslmode=disable}
+      HTTP_ADDR: ":8086"
     depends_on:
       mongo:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     expose:
       - "9093"
+      - "8086"
 
   driver-service:
     build:
@@ -125,9 +133,12 @@ services:
       JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
       DATABASE_URL: ${DATABASE_URL:-postgres://cloudpulse:cloudpulse@postgres:5432/cloudpulse?sslmode=disable}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      LOCAL_SEED_DRIVERS: ${LOCAL_SEED_DRIVERS:-true}
-      LOCAL_AUTO_ACCEPT: ${LOCAL_AUTO_ACCEPT:-true}
-      LOCAL_SIMULATE_TRIPS: ${LOCAL_SIMULATE_TRIPS:-true}
+      JWT_SECRET: ${JWT_SECRET:-cloudpulse-dev-jwt-secret-change-me}
+      AUTH_HTTP_ADDR: ":8085"
+      LOCAL_SEED_DRIVERS: ${LOCAL_SEED_DRIVERS:-false}
+      LOCAL_AUTO_ACCEPT: ${LOCAL_AUTO_ACCEPT:-false}
+      LOCAL_SIMULATE_TRIPS: ${LOCAL_SIMULATE_TRIPS:-false}
+      TRIP_OFFER_TIMEOUT_SEC: ${TRIP_OFFER_TIMEOUT_SEC:-30}
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -137,6 +148,7 @@ services:
         condition: service_healthy
     expose:
       - "9092"
+      - "8085"
 
   payment-service:
     build:
@@ -150,6 +162,14 @@ services:
       APP_URL: ${APP_URL:-http://localhost:3000}
       RABBITMQ_URI: ${RABBITMQ_URI:-amqp://guest:guest@rabbitmq:5672/}
       JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-phonepe}
+      PHONEPE_MERCHANT_ID: ${PHONEPE_MERCHANT_ID:-}
+      PHONEPE_SALT_KEY: ${PHONEPE_SALT_KEY:-}
+      PHONEPE_SALT_INDEX: ${PHONEPE_SALT_INDEX:-1}
+      PHONEPE_ENV: ${PHONEPE_ENV:-UAT}
+      PHONEPE_CALLBACK_URL: ${PHONEPE_CALLBACK_URL:-http://localhost:8080/webhook/phonepe}
+      PHONEPE_SUCCESS_URL: ${PHONEPE_SUCCESS_URL:-http://localhost:3000?payment=success}
+      PHONEPE_CANCEL_URL: ${PHONEPE_CANCEL_URL:-http://localhost:3000?payment=cancel}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_replace_me}
       STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-http://localhost:3000?payment=success}
       STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-http://localhost:3000?payment=cancel}
@@ -175,7 +195,12 @@ services:
       DRIVER_SERVICE_URL: ${DRIVER_SERVICE_URL:-driver-service:9092}
       JAEGER_ENDPOINT: ${JAEGER_ENDPOINT:-http://jaeger:14268/api/traces}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DRIVER_SERVICE_HTTP_URL: ${DRIVER_SERVICE_HTTP_URL:-http://driver-service:8085}
+      TRIP_SERVICE_HTTP_URL: ${TRIP_SERVICE_HTTP_URL:-http://trip-service:8086}
+      JWT_SECRET: ${JWT_SECRET:-cloudpulse-dev-jwt-secret-change-me}
       STRIPE_WEBHOOK_KEY: ${STRIPE_WEBHOOK_KEY:-}
+      PHONEPE_SALT_KEY: ${PHONEPE_SALT_KEY:-}
+      PHONEPE_SALT_INDEX: ${PHONEPE_SALT_INDEX:-1}
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -187,7 +212,7 @@ services:
         condition: service_started
 
   # ---------------------------------------------------------------------------
-  # React / Next.js frontend — published on host port 3000
+  # React / Next.js frontends
   # ---------------------------------------------------------------------------
   web:
     build:
@@ -200,6 +225,19 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    depends_on:
+      - api-gateway
+
+  web-driver:
+    build:
+      context: ./web-driver
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+        NEXT_PUBLIC_WEBSOCKET_URL: ${NEXT_PUBLIC_WEBSOCKET_URL:-ws://localhost:8080/ws}
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
     depends_on:
       - api-gateway
 

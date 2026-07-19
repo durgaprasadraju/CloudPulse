@@ -5,75 +5,73 @@ import (
 	"encoding/json"
 	"log"
 	"math/rand"
+	"time"
+
 	"ride-sharing/shared/contracts"
+	"ride-sharing/shared/env"
 	"ride-sharing/shared/messaging"
 
 	"github.com/rabbitmq/amqp091-go"
 )
 
 type tripConsumer struct {
-	rabbitmq   *messaging.RabbitMQ
-	service    *Service
-	autoAccept bool
-	simulate   bool
-	simulator  *tripSimulator
+	rabbitmq     *messaging.RabbitMQ
+	service      *Service
+	autoAccept   bool
+	simulate     bool
+	simulator    *tripSimulator
+	offerTimeout time.Duration
 }
 
 func NewTripConsumer(rabbitmq *messaging.RabbitMQ, service *Service, autoAccept, simulate bool, simulator *tripSimulator) *tripConsumer {
+	timeoutSec := env.GetInt("TRIP_OFFER_TIMEOUT_SEC", 30)
 	return &tripConsumer{
-		rabbitmq:   rabbitmq,
-		service:    service,
-		autoAccept: autoAccept,
-		simulate:   simulate,
-		simulator:  simulator,
+		rabbitmq:     rabbitmq,
+		service:      service,
+		autoAccept:   autoAccept,
+		simulate:     simulate,
+		simulator:    simulator,
+		offerTimeout: time.Duration(timeoutSec) * time.Second,
 	}
 }
 
 func (c *tripConsumer) Listen() error {
-	return c.rabbitmq.ConsumeMessages(messaging.FindAvailableDriversQueue, func(ctx context.Context, msg amqp091.Delivery) error {
-		var tripEvent contracts.AmqpMessage
-		if err := json.Unmarshal(msg.Body, &tripEvent); err != nil {
-			log.Printf("Failed to unmarshal message: %v", err)
-			return err
-		}
+	return c.rabbitmq.ConsumeMessages(messaging.FindAvailableDriversQueue, c.onFindDrivers)
+}
 
-		var payload messaging.TripEventData
-		if err := json.Unmarshal(tripEvent.Data, &payload); err != nil {
-			log.Printf("Failed to unmarshal message: %v", err)
-			return err
-		}
+func (c *tripConsumer) onFindDrivers(ctx context.Context, msg amqp091.Delivery) error {
+	var tripEvent contracts.AmqpMessage
+	if err := json.Unmarshal(msg.Body, &tripEvent); err != nil {
+		log.Printf("Failed to unmarshal message: %v", err)
+		return err
+	}
 
-		log.Printf("driver received message: %+v", payload)
+	var payload messaging.TripEventData
+	if err := json.Unmarshal(tripEvent.Data, &payload); err != nil {
+		log.Printf("Failed to unmarshal message: %v", err)
+		return err
+	}
 
-		switch msg.RoutingKey {
-		case contracts.TripEventCreated, contracts.TripEventDriverNotInterested:
-			return c.handleFindAndNotifyDrivers(ctx, payload)
-		}
-
-		log.Printf("unknown trip event: %+v", payload)
-
-		return nil
-	})
+	switch msg.RoutingKey {
+	case contracts.TripEventCreated, contracts.TripEventDriverNotInterested:
+		return c.handleFindAndNotifyDrivers(ctx, payload)
+	}
+	return nil
 }
 
 func (c *tripConsumer) handleFindAndNotifyDrivers(ctx context.Context, payload messaging.TripEventData) error {
 	suitableIDs := c.service.FindAvailableDrivers(payload.Trip.SelectedFare.PackageSlug)
-
 	log.Printf("Found suitable drivers %v", len(suitableIDs))
 
 	if len(suitableIDs) == 0 {
-		// Notify the driver that no drivers are available
 		if err := c.rabbitmq.PublishMessage(ctx, contracts.TripEventNoDriversFound, contracts.AmqpMessage{
 			OwnerID: payload.Trip.UserID,
 		}); err != nil {
-			log.Printf("Failed to publish message to exchange: %v", err)
 			return err
 		}
-
 		return nil
 	}
 
-	// Prefer a live (browser-connected) driver over a seeded local one when both exist.
 	suitableDriverID := suitableIDs[rand.Intn(len(suitableIDs))]
 	for _, id := range suitableIDs {
 		if !IsLocalSeededDriver(id) {
@@ -84,13 +82,12 @@ func (c *tripConsumer) handleFindAndNotifyDrivers(ctx context.Context, payload m
 
 	driver := c.service.GetDriver(suitableDriverID)
 	if driver == nil {
-		log.Printf("Driver %s not found in memory", suitableDriverID)
 		return nil
 	}
 
-	// Local prototype: auto-accept seeded drivers so a rider-only tab can reach payment.
 	if c.autoAccept && IsLocalSeededDriver(suitableDriverID) {
 		log.Printf("Auto-accepting trip %s for local driver %s", payload.Trip.Id, suitableDriverID)
+		c.service.MarkBusy(suitableDriverID, true)
 		acceptPayload, err := json.Marshal(messaging.DriverTripResponseData{
 			TripID:  payload.Trip.Id,
 			RiderID: payload.Trip.UserID,
@@ -103,7 +100,6 @@ func (c *tripConsumer) handleFindAndNotifyDrivers(ctx context.Context, payload m
 			OwnerID: suitableDriverID,
 			Data:    acceptPayload,
 		}); err != nil {
-			log.Printf("Failed to publish auto-accept: %v", err)
 			return err
 		}
 		if c.simulate && c.simulator != nil {
@@ -117,14 +113,35 @@ func (c *tripConsumer) handleFindAndNotifyDrivers(ctx context.Context, payload m
 		return err
 	}
 
-	// Notify the driver about a potential trip
+	c.service.SetPendingOffer(suitableDriverID, payload.Trip.Id)
+
 	if err := c.rabbitmq.PublishMessage(ctx, contracts.DriverCmdTripRequest, contracts.AmqpMessage{
 		OwnerID: suitableDriverID,
 		Data:    marshalledEvent,
 	}); err != nil {
-		log.Printf("Failed to publish message to exchange: %v", err)
+		c.service.ClearPendingOffer(suitableDriverID, payload.Trip.Id)
 		return err
 	}
 
+	go c.watchOfferTimeout(payload.Trip.Id, payload.Trip.UserID, suitableDriverID, payload)
 	return nil
+}
+
+func (c *tripConsumer) watchOfferTimeout(tripID, riderID, driverID string, payload messaging.TripEventData) {
+	time.Sleep(c.offerTimeout)
+	if !c.service.ClearPendingOffer(driverID, tripID) {
+		return
+	}
+	log.Printf("Offer timeout for trip %s driver %s — rematching", tripID, driverID)
+	c.service.MarkBusy(driverID, false)
+
+	ctx := context.Background()
+	marshalledPayload, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_ = c.rabbitmq.PublishMessage(ctx, contracts.TripEventDriverNotInterested, contracts.AmqpMessage{
+		OwnerID: riderID,
+		Data:    marshalledPayload,
+	})
 }

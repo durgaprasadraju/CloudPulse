@@ -4,88 +4,111 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 
 	math "math/rand/v2"
+
+	"ride-sharing/shared/auth"
 	pb "ride-sharing/shared/proto/driver"
 	"ride-sharing/shared/tracking"
 	"ride-sharing/shared/util"
-	"sync"
 
 	"github.com/mmcloughlin/geohash"
 )
 
-type driverInMap struct {
+type driverPresence struct {
 	Driver *pb.Driver
-	// Index int
-	// TODO: route
+	Online bool
+	Busy   bool
 }
 
 type Service struct {
-	drivers []*driverInMap
-	mu      sync.RWMutex
+	drivers       map[string]*driverPresence
+	pendingOffers map[string]string // driverID -> tripID
+	mu            sync.RWMutex
 
-	// Optional Terraform-provisioned backends (nil when not configured)
-	store     *DriverStore            // PostgreSQL — persistent driver registry
-	locations *tracking.LocationStore // Redis — real-time location tracking
+	accounts  *auth.AccountStore
+	locations *tracking.LocationStore
 }
 
 func NewService() *Service {
 	return &Service{
-		drivers: make([]*driverInMap, 0),
+		drivers:       make(map[string]*driverPresence),
+		pendingOffers: make(map[string]string),
 	}
 }
 
-// AttachStore enables PostgreSQL persistence and loads previously
-// registered drivers into memory.
-func (s *Service) AttachStore(store *DriverStore) {
-	s.store = store
-
-	persisted, err := store.LoadDrivers(context.Background())
-	if err != nil {
-		log.Printf("Failed to load persisted drivers: %v", err)
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, d := range persisted {
-		s.drivers = append(s.drivers, &driverInMap{Driver: d})
-	}
-	log.Printf("Loaded %d drivers from PostgreSQL", len(persisted))
+func (s *Service) AttachAccounts(accounts *auth.AccountStore) {
+	s.accounts = accounts
 }
 
-// AttachLocationStore enables Redis location tracking.
 func (s *Service) AttachLocationStore(locations *tracking.LocationStore) {
 	s.locations = locations
 }
 
+// FindAvailableDrivers returns online, non-busy drivers matching the package.
 func (s *Service) FindAvailableDrivers(packageType string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var matchingDrivers []string
-
-	for _, driver := range s.drivers {
-		if driver.Driver.PackageSlug == packageType {
-			matchingDrivers = append(matchingDrivers, driver.Driver.Id)
+	var matching []string
+	for id, d := range s.drivers {
+		if !d.Online || d.Busy || d.Driver == nil {
+			continue
+		}
+		if _, offered := s.pendingOffers[id]; offered {
+			continue
+		}
+		if d.Driver.PackageSlug == packageType {
+			matching = append(matching, id)
 		}
 	}
+	return matching
+}
 
-	if len(matchingDrivers) == 0 {
-		return []string{}
+func (s *Service) SetPendingOffer(driverID, tripID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingOffers[driverID] = tripID
+	if s.accounts != nil {
+		_ = s.accounts.SetAvailability(context.Background(), driverID, "offered")
 	}
+}
 
-	return matchingDrivers
+func (s *Service) ClearPendingOffer(driverID, tripID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.pendingOffers[driverID]
+	if !ok {
+		return false
+	}
+	if tripID != "" && current != tripID {
+		return false
+	}
+	delete(s.pendingOffers, driverID)
+	return true
+}
+
+func (s *Service) MarkBusy(driverID string, busy bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if d, ok := s.drivers[driverID]; ok {
+		d.Busy = busy
+	}
+	if busy {
+		delete(s.pendingOffers, driverID)
+	}
+	if s.accounts != nil {
+		status := "available"
+		if busy {
+			status = "busy"
+		}
+		_ = s.accounts.SetAvailability(context.Background(), driverID, status)
+	}
 }
 
 func (s *Service) RegisterDriver(driverId string, packageSlug string) (*pb.Driver, error) {
-	driver := s.registerInMemory(driverId, packageSlug)
-
-	if s.store != nil {
-		if err := s.store.SaveDriver(context.Background(), driver); err != nil {
-			log.Printf("Failed to persist driver %s: %v", driverId, err)
-		}
-	}
+	driver := s.goOnline(driverId, packageSlug)
 
 	if s.locations != nil && driver.Location != nil {
 		if err := s.locations.UpsertDriver(context.Background(), tracking.DriverLocation{
@@ -101,48 +124,74 @@ func (s *Service) RegisterDriver(driverId string, packageSlug string) (*pb.Drive
 		}
 	}
 
+	if s.accounts != nil {
+		_ = s.accounts.SetAvailability(context.Background(), driverId, "available")
+	}
+
 	return driver, nil
 }
 
-func (s *Service) registerInMemory(driverId string, packageSlug string) *pb.Driver {
+func (s *Service) goOnline(driverId string, packageSlug string) *pb.Driver {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Reuse existing registration if the same driver reconnects
-	for _, existing := range s.drivers {
-		if existing.Driver.Id == driverId {
+	if existing, ok := s.drivers[driverId]; ok && existing.Driver != nil {
+		if packageSlug != "" {
 			existing.Driver.PackageSlug = packageSlug
-			return existing.Driver
+		}
+		existing.Online = true
+		existing.Busy = false
+		if IsLocalSeededDriver(driverId) && len(PredefinedRoutes) > 0 {
+			route := PredefinedRoutes[math.IntN(len(PredefinedRoutes))]
+			existing.Driver.Location = &pb.Location{Latitude: route[0][0], Longitude: route[0][1]}
+			existing.Driver.Geohash = geohash.Encode(route[0][0], route[0][1])
+		}
+		return existing.Driver
+	}
+
+	driver := s.buildDriverProfile(driverId, packageSlug)
+	s.drivers[driverId] = &driverPresence{Driver: driver, Online: true, Busy: false}
+	return driver
+}
+
+func (s *Service) buildDriverProfile(driverId, packageSlug string) *pb.Driver {
+	// Prefer durable account profile when available.
+	if s.accounts != nil && !IsLocalSeededDriver(driverId) {
+		if acc, err := s.accounts.GetByID(context.Background(), driverId); err == nil && acc != nil {
+			lat, lon := acc.Latitude, acc.Longitude
+			if lat == 0 && lon == 0 && len(PredefinedRoutes) > 0 {
+				route := PredefinedRoutes[0]
+				lat, lon = route[0][0], route[0][1]
+			}
+			slug := acc.PackageSlug
+			if packageSlug != "" {
+				slug = packageSlug
+			}
+			return &pb.Driver{
+				Id:             acc.ID,
+				Name:           acc.Name,
+				ProfilePicture: acc.ProfilePicture,
+				CarPlate:       acc.CarPlate,
+				PackageSlug:    slug,
+				Geohash:        geohash.Encode(lat, lon),
+				Location:       &pb.Location{Latitude: lat, Longitude: lon},
+			}
 		}
 	}
 
 	randomIndex := math.IntN(len(PredefinedRoutes))
 	randomRoute := PredefinedRoutes[randomIndex]
-
-	randomPlate := GenerateRandomPlate()
-	randomAvatar := util.GetRandomAvatar(randomIndex)
-
-	// we can ignore this property for now, but it must be sent to the frontend.
-	geohash := geohash.Encode(randomRoute[0][0], randomRoute[0][1])
-
-	driver := &pb.Driver{
+	return &pb.Driver{
 		Id:             driverId,
-		Geohash:        geohash,
+		Geohash:        geohash.Encode(randomRoute[0][0], randomRoute[0][1]),
 		Location:       &pb.Location{Latitude: randomRoute[0][0], Longitude: randomRoute[0][1]},
-		Name:           "Lando Norris",
+		Name:           "CloudPulse Driver",
 		PackageSlug:    packageSlug,
-		ProfilePicture: randomAvatar,
-		CarPlate:       randomPlate,
+		ProfilePicture: util.GetRandomAvatar(randomIndex),
+		CarPlate:       GenerateRandomPlate(),
 	}
-
-	s.drivers = append(s.drivers, &driverInMap{
-		Driver: driver,
-	})
-
-	return driver
 }
 
-// SeedLocalDrivers registers one always-available driver per package for local prototypes.
 func (s *Service) SeedLocalDrivers(packageSlugs []string) {
 	for _, slug := range packageSlugs {
 		driverID := "local-driver-" + slug
@@ -153,11 +202,8 @@ func (s *Service) SeedLocalDrivers(packageSlugs []string) {
 func (s *Service) GetDriver(driverID string) *pb.Driver {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	for _, driver := range s.drivers {
-		if driver.Driver.Id == driverID {
-			return driver.Driver
-		}
+	if d, ok := s.drivers[driverID]; ok {
+		return d.Driver
 	}
 	return nil
 }
@@ -166,20 +212,21 @@ func IsLocalSeededDriver(driverID string) bool {
 	return strings.HasPrefix(driverID, "local-driver-")
 }
 
+// UnregisterDriver marks the driver offline and clears Redis presence.
+// Durable account rows are kept.
 func (s *Service) UnregisterDriver(driverId string) {
 	s.mu.Lock()
-	for i, driver := range s.drivers {
-		if driver.Driver.Id == driverId {
-			s.drivers = append(s.drivers[:i], s.drivers[i+1:]...)
-			break
+	if d, ok := s.drivers[driverId]; ok {
+		d.Online = false
+		d.Busy = false
+		if IsLocalSeededDriver(driverId) {
+			delete(s.drivers, driverId)
 		}
 	}
 	s.mu.Unlock()
 
-	if s.store != nil {
-		if err := s.store.DeleteDriver(context.Background(), driverId); err != nil {
-			log.Printf("Failed to delete persisted driver %s: %v", driverId, err)
-		}
+	if s.accounts != nil && !IsLocalSeededDriver(driverId) {
+		_ = s.accounts.SetAvailability(context.Background(), driverId, "offline")
 	}
 
 	if s.locations != nil {

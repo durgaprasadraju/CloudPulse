@@ -7,9 +7,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
+
 	"ride-sharing/services/trip-service/internal/domain"
 	tripTypes "ride-sharing/services/trip-service/pkg/types"
 	"ride-sharing/shared/env"
+	"ride-sharing/shared/otp"
 	pbd "ride-sharing/shared/proto/driver"
 	"ride-sharing/shared/proto/trip"
 	"ride-sharing/shared/types"
@@ -18,13 +21,22 @@ import (
 )
 
 type service struct {
-	repo domain.TripRepository
+	repo   domain.TripRepository
+	bonus  BonusPointsUpdater
+}
+
+// BonusPointsUpdater credits driver bonus points after a review (e.g. Postgres).
+type BonusPointsUpdater interface {
+	AddBonusPoints(ctx context.Context, driverID string, points int) error
+	GetBonusPoints(ctx context.Context, driverID string) (int, error)
 }
 
 func NewService(repo domain.TripRepository) *service {
-	return &service{
-		repo: repo,
-	}
+	return &service{repo: repo}
+}
+
+func NewServiceWithBonus(repo domain.TripRepository, bonus BonusPointsUpdater) *service {
+	return &service{repo: repo, bonus: bonus}
 }
 
 func (s *service) CreateTrip(ctx context.Context, fare *domain.RideFareModel) (*domain.TripModel, error) {
@@ -170,22 +182,23 @@ func estimateFareRoute(f *domain.RideFareModel, route *tripTypes.OsrmApiResponse
 }
 
 func getBaseFares() []*domain.RideFareModel {
+	// Values are paise (1/100 INR), shown as ₹ on the web UI.
 	return []*domain.RideFareModel{
 		{
 			PackageSlug:       "suv",
-			TotalPriceInCents: 200,
+			TotalPriceInCents: 8000,
 		},
 		{
 			PackageSlug:       "sedan",
-			TotalPriceInCents: 350,
+			TotalPriceInCents: 10000,
 		},
 		{
 			PackageSlug:       "van",
-			TotalPriceInCents: 400,
+			TotalPriceInCents: 12000,
 		},
 		{
 			PackageSlug:       "luxury",
-			TotalPriceInCents: 1000,
+			TotalPriceInCents: 28000,
 		},
 	}
 }
@@ -196,4 +209,161 @@ func (s *service) GetTripByID(ctx context.Context, id string) (*domain.TripModel
 
 func (s *service) UpdateTrip(ctx context.Context, tripID string, status string, driver *pbd.Driver) error {
 	return s.repo.UpdateTrip(ctx, tripID, status, driver)
+}
+
+func (s *service) TransitionTrip(ctx context.Context, tripID, toStatus string, driver *pbd.Driver) (*domain.TripModel, error) {
+	from := domain.AllowedFrom[toStatus]
+	return s.repo.TransitionTrip(ctx, tripID, toStatus, from, driver)
+}
+
+func (s *service) IssueOTP(ctx context.Context, tripID string) (string, error) {
+	code, err := otp.Generate(otp.DefaultLength)
+	if err != nil {
+		return "", err
+	}
+	expires := time.Now().UTC().Add(otp.DefaultTTL)
+	if err := s.repo.SetOTP(ctx, tripID, otp.Hash(code), expires); err != nil {
+		return "", err
+	}
+	return code, nil
+}
+
+func (s *service) VerifyOTPAndStart(ctx context.Context, tripID, code, driverID string) (*domain.TripModel, error) {
+	trip, err := s.repo.GetTripByID(ctx, tripID)
+	if err != nil || trip == nil {
+		return nil, fmt.Errorf("trip not found")
+	}
+	if trip.Status != "arrived" {
+		return nil, fmt.Errorf("trip must be arrived before OTP start (status=%s)", trip.Status)
+	}
+	if driverID != "" && trip.Driver != nil && trip.Driver.Id != "" && trip.Driver.Id != driverID {
+		return nil, fmt.Errorf("driver mismatch")
+	}
+	if trip.OTPVerifiedAt != nil {
+		return nil, fmt.Errorf("OTP already verified")
+	}
+	if time.Now().UTC().After(trip.OTPExpiresAt) {
+		return nil, fmt.Errorf("OTP expired")
+	}
+	if trip.OTPAttempts >= otp.DefaultMaxAttempts {
+		return nil, fmt.Errorf("too many OTP attempts")
+	}
+	if !otp.Verify(code, trip.OTPHash) {
+		attempts, _ := s.repo.IncrementOTPAttempts(ctx, tripID)
+		remaining := otp.DefaultMaxAttempts - attempts
+		if remaining < 0 {
+			remaining = 0
+		}
+		return nil, fmt.Errorf("invalid OTP (%d attempts remaining)", remaining)
+	}
+	return s.repo.MarkOTPVerified(ctx, tripID)
+}
+
+func (s *service) CancelTrip(ctx context.Context, tripID, userID string) (*domain.TripModel, error) {
+	trip, err := s.repo.GetTripByID(ctx, tripID)
+	if err != nil || trip == nil {
+		return nil, fmt.Errorf("trip not found")
+	}
+	if userID != "" && trip.UserID != userID {
+		return nil, fmt.Errorf("not trip owner")
+	}
+	return s.repo.TransitionTrip(ctx, tripID, "cancelled", domain.AllowedFrom["cancelled"], nil)
+}
+
+func (s *service) CompleteTrip(ctx context.Context, tripID string) (*domain.TripModel, error) {
+	return s.repo.TransitionTrip(ctx, tripID, "completed", domain.AllowedFrom["completed"], nil)
+}
+
+func (s *service) MarkPaid(ctx context.Context, tripID string) error {
+	_, err := s.repo.MarkPaymentDone(ctx, tripID)
+	return err
+}
+
+func (s *service) SubmitReview(ctx context.Context, tripID, userID string, rating int, comment string) (*domain.ReviewModel, error) {
+	bonus, err := domain.BonusPointsForRating(rating)
+	if err != nil {
+		return nil, err
+	}
+	trip, err := s.repo.GetTripByID(ctx, tripID)
+	if err != nil || trip == nil {
+		return nil, fmt.Errorf("trip not found")
+	}
+	if trip.Status != "payed" {
+		return nil, domain.ErrTripNotPaid
+	}
+	if userID != "" && trip.UserID != userID {
+		return nil, domain.ErrNotTripOwner
+	}
+	if trip.Driver == nil || trip.Driver.Id == "" {
+		return nil, domain.ErrNoDriver
+	}
+	existing, err := s.repo.GetReviewByTripID(ctx, tripID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, domain.ErrReviewExists
+	}
+
+	review := &domain.ReviewModel{
+		TripID:      tripID,
+		UserID:      trip.UserID,
+		DriverID:    trip.Driver.Id,
+		Rating:      rating,
+		Comment:     comment,
+		BonusPoints: bonus,
+	}
+	created, err := s.repo.CreateReview(ctx, review)
+	if err != nil {
+		return nil, err
+	}
+	if s.bonus != nil {
+		if err := s.bonus.AddBonusPoints(ctx, trip.Driver.Id, bonus); err != nil {
+			log.Printf("failed to credit bonus points for driver %s: %v", trip.Driver.Id, err)
+		}
+	}
+	return created, nil
+}
+
+func (s *service) DriverTrips(ctx context.Context, driverID string) ([]*domain.TripModel, error) {
+	return s.repo.ListTripsByDriver(ctx, driverID, []string{"completed", "payed"}, 50)
+}
+
+func (s *service) DriverDashboard(ctx context.Context, driverID string) (*domain.DriverDashboard, error) {
+	trips, err := s.repo.ListTripsByDriver(ctx, driverID, []string{"completed", "payed"}, 20)
+	if err != nil {
+		return nil, err
+	}
+	reviews, err := s.repo.ListReviewsByDriver(ctx, driverID, 20)
+	if err != nil {
+		return nil, err
+	}
+
+	var sum float64
+	for _, r := range reviews {
+		sum += float64(r.Rating)
+	}
+	avg := 0.0
+	if len(reviews) > 0 {
+		avg = sum / float64(len(reviews))
+	}
+
+	bonusPoints := 0
+	if s.bonus != nil {
+		if pts, err := s.bonus.GetBonusPoints(ctx, driverID); err == nil {
+			bonusPoints = pts
+		}
+	} else {
+		for _, r := range reviews {
+			bonusPoints += r.BonusPoints
+		}
+	}
+
+	return &domain.DriverDashboard{
+		TripCount:     len(trips),
+		BonusPoints:   bonusPoints,
+		AverageRating: avg,
+		RecentTrips:   trips,
+		RecentReviews: reviews,
+	}, nil
 }

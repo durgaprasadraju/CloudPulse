@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"strings"
+
 	"ride-sharing/services/api-gateway/grpc_clients"
 	"ride-sharing/shared/contracts"
 	"ride-sharing/shared/env"
@@ -165,4 +170,141 @@ func handleStripeWebhook(w http.ResponseWriter, r *http.Request, rb *messaging.R
 			return
 		}
 	}
+}
+
+// handleMockPaymentSuccess marks a local mock checkout as paid (no Stripe webhook).
+func handleMockPaymentSuccess(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
+	ctx := r.Context()
+	var body struct {
+		TripID   string `json:"tripID"`
+		UserID   string `json:"userID"`
+		DriverID string `json:"driverID"`
+		SessionID string `json:"sessionID"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+	if body.TripID == "" {
+		http.Error(w, "tripID required", http.StatusBadRequest)
+		return
+	}
+	if body.SessionID != "" && !isLocalMockSession(body.SessionID) {
+		http.Error(w, "only local mock sessions allowed", http.StatusBadRequest)
+		return
+	}
+
+	payloadBytes, err := json.Marshal(messaging.PaymentStatusUpdateData{
+		TripID:   body.TripID,
+		UserID:   body.UserID,
+		DriverID: body.DriverID,
+	})
+	if err != nil {
+		http.Error(w, "marshal failed", http.StatusInternalServerError)
+		return
+	}
+	if err := rb.PublishMessage(ctx, contracts.PaymentEventSuccess, contracts.AmqpMessage{
+		OwnerID: body.UserID,
+		Data:    payloadBytes,
+	}); err != nil {
+		http.Error(w, "publish failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, contracts.APIResponse{Data: map[string]string{"status": "ok"}})
+}
+
+func isLocalMockSession(sessionID string) bool {
+	return strings.HasPrefix(sessionID, "cs_test_local_") || strings.HasPrefix(sessionID, "pp_test_local_")
+}
+
+// handlePhonePeWebhook accepts PhonePe server callbacks and marks the trip paid.
+func handlePhonePeWebhook(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
+	ctx := r.Context()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	saltKey := env.GetString("PHONEPE_SALT_KEY", "")
+	saltIndex := env.GetString("PHONEPE_SALT_INDEX", "1")
+	xVerify := r.Header.Get("X-VERIFY")
+
+	var envelope struct {
+		Response string `json:"response"`
+	}
+	_ = json.Unmarshal(body, &envelope)
+	b64 := envelope.Response
+	if b64 == "" {
+		// Some PhonePe payloads send the base64 blob as the raw body string.
+		b64 = strings.TrimSpace(string(body))
+	}
+
+	if saltKey != "" && xVerify != "" && b64 != "" {
+		expectedSum := sha256.Sum256([]byte(b64 + saltKey))
+		expected := hex.EncodeToString(expectedSum[:]) + "###" + saltIndex
+		if !strings.EqualFold(expected, xVerify) {
+			http.Error(w, "invalid checksum", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		// Fall back to treating body as JSON payload directly.
+		decoded = body
+	}
+
+	var callback struct {
+		Code string `json:"code"`
+		Data struct {
+			MerchantTransactionID string `json:"merchantTransactionId"`
+			State                 string `json:"state"`
+			Amount                int64  `json:"amount"`
+			MetaInfo              struct {
+				UDF1 string `json:"udf1"`
+				UDF2 string `json:"udf2"`
+				UDF3 string `json:"udf3"`
+			} `json:"metaInfo"`
+		} `json:"data"`
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal(decoded, &callback); err != nil {
+		log.Printf("phonepe webhook decode: %v", err)
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if !(callback.Success || callback.Code == "PAYMENT_SUCCESS" || strings.EqualFold(callback.Data.State, "COMPLETED")) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+		return
+	}
+
+	tripID := callback.Data.MetaInfo.UDF1
+	userID := callback.Data.MetaInfo.UDF2
+	driverID := callback.Data.MetaInfo.UDF3
+	if tripID == "" {
+		http.Error(w, "trip id missing", http.StatusBadRequest)
+		return
+	}
+
+	payloadBytes, err := json.Marshal(messaging.PaymentStatusUpdateData{
+		TripID:   tripID,
+		UserID:   userID,
+		DriverID: driverID,
+	})
+	if err != nil {
+		http.Error(w, "marshal failed", http.StatusInternalServerError)
+		return
+	}
+	if err := rb.PublishMessage(ctx, contracts.PaymentEventSuccess, contracts.AmqpMessage{
+		OwnerID: userID,
+		Data:    payloadBytes,
+	}); err != nil {
+		http.Error(w, "publish failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

@@ -46,14 +46,18 @@ backend:
     RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
     TRIP_SERVICE_URL: "trip-service:9093"
     DRIVER_SERVICE_URL: "driver-service:9092"
+    DRIVER_SERVICE_HTTP_URL: "http://driver-service:8085"
+    TRIP_SERVICE_HTTP_URL: "http://trip-service:8086"
     JAEGER_ENDPOINT: "http://jaeger:14268/api/traces"
     # Terraform-provisioned ElastiCache Redis — real-time driver tracking.
     # Set to `terraform output redis_url` (e.g. redis://<primary-endpoint>:6379/0)
     REDIS_URL: ""
+    JWT_SECRET: "cloudpulse-change-me-in-production"
     # driver-service also reads DATABASE_URL (Terraform RDS endpoint; credentials
     # live in AWS Secrets Manager — see `terraform output rds_secrets_manager_arn`).
     DATABASE_URL: ""
-
+    PHONEPE_SALT_KEY: ""
+    PHONEPE_SALT_INDEX: "1"
   # Extra env from existing Secrets / ConfigMaps
   extraEnv: []
   # - name: STRIPE_WEBHOOK_KEY
@@ -135,10 +139,60 @@ frontend:
     periodSeconds: 10
 
 ## ---------------------------------------------------------------------------
+## Driver Next.js frontend (driver.cloudpulse.live / :3001)
+## ---------------------------------------------------------------------------
+driverFrontend:
+  enabled: true
+  name: driver-frontend
+  replicaCount: 1
+
+  image:
+    repository: cloudpulse/cloudpulse-web-driver
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3001
+
+  containerPort: 3001
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  env:
+    NODE_ENV: production
+    NEXT_PUBLIC_API_URL: "https://api.cloudpulse.live"
+    NEXT_PUBLIC_WEBSOCKET_URL: "wss://api.cloudpulse.live/ws"
+
+  extraEnv: []
+
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 20
+
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+
+## ---------------------------------------------------------------------------
 ## Ingress — AWS Load Balancer Controller (ALB)
 ## Hosts:
-##   api.cloudpulse.live  → Go backend
-##   cloudpulse.live      → React frontend
+##   api.cloudpulse.live     → Go backend
+##   cloudpulse.live         → Rider frontend
+##   driver.cloudpulse.live  → Driver frontend
 ## ---------------------------------------------------------------------------
 ingress:
   enabled: true
@@ -172,6 +226,11 @@ ingress:
     www:
       enabled: true
       host: www.cloudpulse.live
+    driver:
+      host: driver.cloudpulse.live
+      paths:
+        - path: /
+          pathType: Prefix
 
 ## Service account
 serviceAccount:
@@ -222,6 +281,7 @@ microservices:
     replicaCount: 1
     serviceEnabled: true
     containerPort: 9093
+    httpPort: 8086
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
       tag: "latest"
@@ -232,6 +292,10 @@ microservices:
       RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
       OSRM_API: "https://router.project-osrm.org"
       JAEGER_ENDPOINT: ""
+      HTTP_ADDR: ":8086"
+      JWT_SECRET: "cloudpulse-change-me-in-production"
+    # DATABASE_URL injected via --set / values-production from Secrets Manager
+    extraEnv: []
     resources:
       requests:
         cpu: 100m
@@ -245,6 +309,7 @@ microservices:
     replicaCount: 1
     serviceEnabled: true
     containerPort: 9092
+    httpPort: 8085
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-driver-service
       tag: "latest"
@@ -253,9 +318,12 @@ microservices:
       ENVIRONMENT: production
       RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
       REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
-      LOCAL_SEED_DRIVERS: "true"
-      LOCAL_AUTO_ACCEPT: "true"
-      LOCAL_SIMULATE_TRIPS: "true"
+      AUTH_HTTP_ADDR: ":8085"
+      JWT_SECRET: "cloudpulse-change-me-in-production"
+      LOCAL_SEED_DRIVERS: "false"
+      LOCAL_AUTO_ACCEPT: "false"
+      LOCAL_SIMULATE_TRIPS: "false"
+      TRIP_OFFER_TIMEOUT_SEC: "30"
       JAEGER_ENDPOINT: ""
     # DATABASE_URL injected via --set / values-production from Secrets Manager
     extraEnv: []
@@ -280,6 +348,14 @@ microservices:
       ENVIRONMENT: production
       APP_URL: "https://cloudpulse.live"
       RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
+      PAYMENT_PROVIDER: "phonepe"
+      PHONEPE_MERCHANT_ID: ""
+      PHONEPE_SALT_KEY: ""
+      PHONEPE_SALT_INDEX: "1"
+      PHONEPE_ENV: "UAT"
+      PHONEPE_CALLBACK_URL: "https://api.cloudpulse.live/webhook/phonepe"
+      PHONEPE_SUCCESS_URL: "https://cloudpulse.live?payment=success"
+      PHONEPE_CANCEL_URL: "https://cloudpulse.live?payment=cancel"
       STRIPE_SECRET_KEY: "sk_test_local"
       STRIPE_SUCCESS_URL: "https://cloudpulse.live?payment=success"
       STRIPE_CANCEL_URL: "https://cloudpulse.live?payment=cancel"

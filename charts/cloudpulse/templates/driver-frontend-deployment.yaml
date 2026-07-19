@@ -1,0 +1,53 @@
+{{- if .Values.driverFrontend.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cloudpulse.driverFrontend.fullname" . }}
+  namespace: {{ include "cloudpulse.namespace" . }}
+  labels:
+    {{- include "cloudpulse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: driver-frontend
+spec:
+  replicas: {{ .Values.driverFrontend.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cloudpulse.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: driver-frontend
+  template:
+    metadata:
+      labels:
+        {{- include "cloudpulse.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: driver-frontend
+    spec:
+      serviceAccountName: {{ include "cloudpulse.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: driver-frontend
+          image: "{{ .Values.driverFrontend.image.repository }}:{{ .Values.driverFrontend.image.tag }}"
+          imagePullPolicy: {{ .Values.driverFrontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.driverFrontend.containerPort }}
+              protocol: TCP
+          env:
+            {{- range $key, $value := .Values.driverFrontend.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- with .Values.driverFrontend.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.driverFrontend.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.driverFrontend.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.driverFrontend.resources | nindent 12 }}
+{{- end }}

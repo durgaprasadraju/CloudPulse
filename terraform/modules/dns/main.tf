@@ -145,3 +145,17 @@ resource "aws_route53_record" "www" {
     evaluate_target_health = true
   }
 }
+
+resource "aws_route53_record" "driver" {
+  count = var.alb_dns_name != "" && var.alb_zone_id != "" ? 1 : 0
+
+  zone_id = local.zone_id
+  name    = "driver.${local.apex_domain}"
+  type    = "A"
+
+  alias {
+    name                   = var.alb_dns_name
+    zone_id                = var.alb_zone_id
+    evaluate_target_health = true
+  }
+}

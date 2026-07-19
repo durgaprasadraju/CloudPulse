@@ -1,0 +1,20 @@
+{{- if .Values.driverFrontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cloudpulse.driverFrontend.fullname" . }}
+  namespace: {{ include "cloudpulse.namespace" . }}
+  labels:
+    {{- include "cloudpulse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: driver-frontend
+spec:
+  type: {{ .Values.driverFrontend.service.type }}
+  ports:
+    - port: {{ .Values.driverFrontend.service.port }}
+      targetPort: {{ .Values.driverFrontend.service.targetPort }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "cloudpulse.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: driver-frontend
+{{- end }}

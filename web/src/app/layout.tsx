@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RideShare",
-  description: "RideShare",
+  title: "CloudPulse Rider",
+  description: "Book a ride with CloudPulse",
 };
 
 export default function RootLayout({

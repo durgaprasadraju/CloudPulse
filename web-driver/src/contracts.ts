@@ -1,0 +1,176 @@
+import { Coordinate, Driver, Route, RouteFare, Trip } from "./types";
+
+export enum BackendEndpoints {
+  PREVIEW_TRIP = "/trip/preview",
+  START_TRIP = "/trip/start",
+  WS_DRIVERS = "/drivers",
+  WS_RIDERS = "/riders",
+  DRIVERS_REGISTER = "/drivers/register",
+  DRIVERS_LOGIN = "/drivers/login",
+}
+
+export enum TripEvents {
+  NoDriversFound = "trip.event.no_drivers_found",
+  DriverAssigned = "trip.event.driver_assigned",
+  DriverEnRoute = "trip.event.driver_en_route",
+  DriverArrived = "trip.event.driver_arrived",
+  TripStarted = "trip.event.started",
+  Completed = "trip.event.completed",
+  Cancelled = "trip.event.cancelled",
+  Created = "trip.event.created",
+  OTPIssued = "trip.event.otp_issued",
+  OTPFailed = "trip.event.otp_failed",
+  OTPVerified = "trip.event.otp_verified",
+  DriverLocation = "driver.cmd.location",
+  RiderLocation = "rider.cmd.location",
+  DriverTripRequest = "driver.cmd.trip_request",
+  DriverTripAccept = "driver.cmd.trip_accept",
+  DriverTripDecline = "driver.cmd.trip_decline",
+  DriverRegister = "driver.cmd.register",
+  TripStatus = "trip.cmd.status",
+  TripCancel = "trip.cmd.cancel",
+  TripVerifyOTP = "trip.cmd.verify_otp",
+  PaymentSessionCreated = "payment.event.session_created",
+}
+
+export type ServerWsMessage =
+  | PaymentSessionCreatedRequest
+  | DriverAssignedRequest
+  | DriverLocationRequest
+  | DriverTripRequest
+  | DriverRegisterRequest
+  | TripCreatedRequest
+  | TripLifecycleRequest
+  | OTPResultRequest
+  | NoDriversFoundRequest;
+
+export type ClientWsMessage =
+  | DriverResponseToTripResponse
+  | DriverLocationUpdate
+  | TripStatusUpdate
+  | TripVerifyOTPMessage
+  | TripCancelMessage;
+
+interface TripCreatedRequest {
+  type: TripEvents.Created;
+  data: Trip;
+}
+
+interface NoDriversFoundRequest {
+  type: TripEvents.NoDriversFound;
+}
+
+interface DriverRegisterRequest {
+  type: TripEvents.DriverRegister;
+  data: Driver;
+}
+
+interface DriverTripRequest {
+  type: TripEvents.DriverTripRequest;
+  data: Trip | { trip: Trip };
+}
+
+export interface PaymentEventSessionCreatedData {
+  tripID: string;
+  sessionID: string;
+  amount: number;
+  currency: string;
+}
+
+export interface TripOTPResultData {
+  tripID: string;
+  success: boolean;
+  message?: string;
+}
+
+interface PaymentSessionCreatedRequest {
+  type: TripEvents.PaymentSessionCreated;
+  data: PaymentEventSessionCreatedData;
+}
+
+interface OTPResultRequest {
+  type: TripEvents.OTPFailed | TripEvents.OTPVerified;
+  data: TripOTPResultData | Trip | { trip: Trip };
+}
+
+interface DriverAssignedRequest {
+  type: TripEvents.DriverAssigned;
+  data: Trip;
+}
+
+interface TripLifecycleRequest {
+  type:
+    | TripEvents.DriverEnRoute
+    | TripEvents.DriverArrived
+    | TripEvents.TripStarted
+    | TripEvents.Completed
+    | TripEvents.Cancelled;
+  data: Trip | { trip: Trip };
+}
+
+interface DriverLocationRequest {
+  type: TripEvents.DriverLocation;
+  data: Driver[];
+}
+
+interface DriverResponseToTripResponse {
+  type: TripEvents.DriverTripAccept | TripEvents.DriverTripDecline;
+  data: {
+    tripID: string;
+    riderID: string;
+    driver: Driver;
+  };
+}
+
+interface DriverLocationUpdate {
+  type: TripEvents.DriverLocation;
+  data: {
+    location: Coordinate;
+    geohash: string;
+    packageSlug?: string;
+  };
+}
+
+interface TripStatusUpdate {
+  type: TripEvents.TripStatus;
+  data: {
+    event: TripEvents;
+    riderID: string;
+    trip: Trip;
+  };
+}
+
+interface TripVerifyOTPMessage {
+  type: TripEvents.TripVerifyOTP;
+  data: {
+    tripID: string;
+    otp: string;
+    riderID: string;
+  };
+}
+
+interface TripCancelMessage {
+  type: TripEvents.TripCancel;
+  data: {
+    tripID: string;
+  };
+}
+
+export interface HTTPTripPreviewResponse {
+  route: Route;
+  rideFares: RouteFare[];
+}
+
+export function isValidTripEvent(event: string): event is TripEvents {
+  return Object.values(TripEvents).includes(event as TripEvents);
+}
+
+export function isValidWsMessage(message: ServerWsMessage): message is ServerWsMessage {
+  return isValidTripEvent(message.type);
+}
+
+export function unwrapTrip(data: Trip | { trip: Trip } | undefined): Trip | null {
+  if (!data) return null;
+  if ("trip" in data && data.trip) return data.trip;
+  return data as Trip;
+}

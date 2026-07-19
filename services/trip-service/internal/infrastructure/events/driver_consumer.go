@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+
 	"ride-sharing/services/trip-service/internal/domain"
 	"ride-sharing/shared/contracts"
 	"ride-sharing/shared/messaging"
@@ -47,6 +48,7 @@ func (c *driverConsumer) Listen() error {
 				log.Printf("Failed to handle the trip accept: %v", err)
 				return err
 			}
+			return nil
 		case contracts.DriverCmdTripDecline:
 			if err := c.handleTripDeclined(ctx, payload.TripID, payload.RiderID); err != nil {
 				log.Printf("Failed to handle the trip decline: %v", err)
@@ -61,11 +63,12 @@ func (c *driverConsumer) Listen() error {
 }
 
 func (c *driverConsumer) handleTripDeclined(ctx context.Context, tripID, riderID string) error {
-	// When a driver declines, we should try to find another driver
-
 	trip, err := c.service.GetTripByID(ctx, tripID)
 	if err != nil {
 		return err
+	}
+	if trip == nil || trip.Status == "cancelled" || trip.Status == "accepted" {
+		return nil
 	}
 
 	newPayload := messaging.TripEventData{
@@ -77,31 +80,27 @@ func (c *driverConsumer) handleTripDeclined(ctx context.Context, tripID, riderID
 		return err
 	}
 
-	if err := c.rabbitmq.PublishMessage(ctx, contracts.TripEventDriverNotInterested,
+	return c.rabbitmq.PublishMessage(ctx, contracts.TripEventDriverNotInterested,
 		contracts.AmqpMessage{
 			OwnerID: riderID,
 			Data:    marshalledPayload,
 		},
-	); err != nil {
-		return err
-	}
-
-	return nil
+	)
 }
 
 func (c *driverConsumer) handleTripAccepted(ctx context.Context, tripID string, driver *pbd.Driver) error {
-	// 1. Fetch the trip
 	trip, err := c.service.GetTripByID(ctx, tripID)
 	if err != nil {
 		return err
 	}
-
 	if trip == nil {
-		return fmt.Errorf("Trip was not found %s", tripID)
+		return fmt.Errorf("trip was not found %s", tripID)
+	}
+	if trip.Status == "cancelled" {
+		return fmt.Errorf("trip already cancelled")
 	}
 
-	// 2. Update the trip
-	if err := c.service.UpdateTrip(ctx, tripID, "accepted", driver); err != nil {
+	if _, err := c.service.TransitionTrip(ctx, tripID, "accepted", driver); err != nil {
 		log.Printf("Failed to update the trip: %v", err)
 		return err
 	}
@@ -111,7 +110,12 @@ func (c *driverConsumer) handleTripAccepted(ctx context.Context, tripID string, 
 		return err
 	}
 
-	// 3. Notify the rider that a driver has been assigned (payment happens after trip completes)
+	code, err := c.service.IssueOTP(ctx, tripID)
+	if err != nil {
+		log.Printf("Failed to issue OTP: %v", err)
+		return err
+	}
+
 	marshalledTrip, err := json.Marshal(trip.ToProto())
 	if err != nil {
 		return err
@@ -124,5 +128,15 @@ func (c *driverConsumer) handleTripAccepted(ctx context.Context, tripID string, 
 		return err
 	}
 
-	return nil
+	otpPayload, err := json.Marshal(messaging.TripOTPIssuedData{
+		TripID: tripID,
+		OTP:    code,
+	})
+	if err != nil {
+		return err
+	}
+	return c.rabbitmq.PublishMessage(ctx, contracts.TripEventOTPIssued, contracts.AmqpMessage{
+		OwnerID: trip.UserID,
+		Data:    otpPayload,
+	})
 }

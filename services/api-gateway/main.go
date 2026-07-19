@@ -71,6 +71,24 @@ func main() {
 
 	mux.Handle("POST /trip/preview", tracing.WrapHandlerFunc(enableCORS(handleTripPreview), "/trip/preview"))
 	mux.Handle("POST /trip/start", tracing.WrapHandlerFunc(enableCORS(handleTripStart), "/trip/start"))
+	mux.Handle("POST /drivers/register", tracing.WrapHandlerFunc(enableCORS(handleDriverRegister), "/drivers/register"))
+	mux.Handle("OPTIONS /drivers/register", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/drivers/register"))
+	mux.Handle("POST /drivers/login", tracing.WrapHandlerFunc(enableCORS(handleDriverLogin), "/drivers/login"))
+	mux.Handle("OPTIONS /drivers/login", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/drivers/login"))
+	mux.Handle("GET /drivers/me", tracing.WrapHandlerFunc(enableCORS(handleDriverMe), "/drivers/me"))
+	mux.Handle("OPTIONS /drivers/me", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/drivers/me"))
+	mux.Handle("GET /drivers/me/dashboard", tracing.WrapHandlerFunc(enableCORS(handleDriverDashboard), "/drivers/me/dashboard"))
+	mux.Handle("OPTIONS /drivers/me/dashboard", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/drivers/me/dashboard"))
+	mux.Handle("GET /drivers/me/trips", tracing.WrapHandlerFunc(enableCORS(handleDriverTrips), "/drivers/me/trips"))
+	mux.Handle("OPTIONS /drivers/me/trips", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/drivers/me/trips"))
+	mux.Handle("POST /trips/{id}/review", tracing.WrapHandlerFunc(enableCORS(handleTripReview), "/trips/{id}/review"))
+	mux.Handle("OPTIONS /trips/{id}/review", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/trips/{id}/review"))
+	mux.Handle("OPTIONS /trip/preview", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/trip/preview"))
+	mux.Handle("OPTIONS /trip/start", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/trip/start"))
+	mux.Handle("POST /payment/mock-success", tracing.WrapHandlerFunc(enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		handleMockPaymentSuccess(w, r, rabbitmq)
+	}), "/payment/mock-success"))
+	mux.Handle("OPTIONS /payment/mock-success", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/payment/mock-success"))
 	mux.Handle("/ws/drivers", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleDriversWebSocket(w, r, rabbitmq, locations)
 	}, "/ws/drivers"))
@@ -80,6 +98,10 @@ func main() {
 	mux.Handle("/webhook/stripe", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleStripeWebhook(w, r, rabbitmq)
 	}, "/webhook/stripe"))
+	mux.Handle("POST /webhook/phonepe", tracing.WrapHandlerFunc(enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		handlePhonePeWebhook(w, r, rabbitmq)
+	}), "/webhook/phonepe"))
+	mux.Handle("OPTIONS /webhook/phonepe", tracing.WrapHandlerFunc(enableCORS(func(http.ResponseWriter, *http.Request) {}), "/webhook/phonepe"))
 
 	server := &http.Server{
 		Addr:    httpAddr,

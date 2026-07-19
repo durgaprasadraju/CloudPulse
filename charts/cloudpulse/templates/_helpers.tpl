@@ -63,6 +63,13 @@ Frontend full name
 {{- end }}
 
 {{/*
+Driver frontend full name
+*/}}
+{{- define "cloudpulse.driverFrontend.fullname" -}}
+{{- printf "%s-%s" (include "cloudpulse.fullname" .) .Values.driverFrontend.name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Service account name
 */}}
 {{- define "cloudpulse.serviceAccountName" -}}

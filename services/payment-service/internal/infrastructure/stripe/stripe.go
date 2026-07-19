@@ -3,6 +3,7 @@ package stripe
 import (
 	"context"
 	"fmt"
+
 	"ride-sharing/services/payment-service/internal/domain"
 	"ride-sharing/services/payment-service/pkg/types"
 
@@ -16,17 +17,14 @@ type stripeClient struct {
 
 func NewStripeClient(config *types.PaymentConfig) domain.PaymentProcessor {
 	stripe.Key = config.StripeSecretKey
-
-	return &stripeClient{
-		config: config,
-	}
+	return &stripeClient{config: config}
 }
 
-func (s *stripeClient) CreatePaymentSession(ctx context.Context, amount int64, currency string, metadata map[string]string) (string, error) {
+func (s *stripeClient) CreatePaymentSession(ctx context.Context, amount int64, currency string, metadata map[string]string) (*types.PaymentSession, error) {
 	params := &stripe.CheckoutSessionParams{
 		SuccessURL: stripe.String(s.config.SuccessURL),
 		CancelURL:  stripe.String(s.config.CancelURL),
-		Metadata: metadata,
+		Metadata:   metadata,
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
 				PriceData: &stripe.CheckoutSessionLineItemPriceDataParams{
@@ -44,8 +42,12 @@ func (s *stripeClient) CreatePaymentSession(ctx context.Context, amount int64, c
 
 	result, err := session.New(params)
 	if err != nil {
-		return "", fmt.Errorf("failed to create a payment session on stripe: %w", err)
+		return nil, fmt.Errorf("failed to create a payment session on stripe: %w", err)
 	}
 
-	return result.ID, nil
+	return &types.PaymentSession{
+		SessionID:   result.ID,
+		Provider:    types.ProviderStripe,
+		CheckoutURL: result.URL,
+	}, nil
 }

@@ -4,17 +4,22 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
+
+	"ride-sharing/services/trip-service/internal/domain"
 	"ride-sharing/services/trip-service/internal/infrastructure/events"
 	"ride-sharing/services/trip-service/internal/infrastructure/grpc"
+	"ride-sharing/services/trip-service/internal/infrastructure/httpapi"
 	"ride-sharing/services/trip-service/internal/infrastructure/repository"
 	"ride-sharing/services/trip-service/internal/service"
+	"ride-sharing/shared/auth"
 	"ride-sharing/shared/db"
 	"ride-sharing/shared/env"
 	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/tracing"
-	"syscall"
 
 	grpcserver "google.golang.org/grpc"
 )
@@ -22,7 +27,6 @@ import (
 var GrpcAddr = ":9093"
 
 func main() {
-	// Initialize Tracing
 	tracerCfg := tracing.Config{
 		ServiceName:    "trip-service",
 		Environment:    env.GetString("ENVIRONMENT", "development"),
@@ -38,7 +42,6 @@ func main() {
 	defer cancel()
 	defer sh(ctx)
 
-	// Initialize MongoDB
 	mongoClient, err := db.NewMongoClient(ctx, db.NewMongoDefaultConfig())
 	if err != nil {
 		log.Fatalf("Failed to initialize MongoDB, err: %v", err)
@@ -46,11 +49,28 @@ func main() {
 	defer mongoClient.Disconnect(ctx)
 
 	mongoDb := db.GetDatabase(mongoClient, db.NewMongoDefaultConfig())
+	if err := repository.EnsureReviewIndexes(ctx, mongoDb); err != nil {
+		log.Printf("warning: review indexes: %v", err)
+	}
 
 	rabbitMqURI := env.GetString("RABBITMQ_URI", "amqp://guest:guest@rabbitmq:5672/")
 
 	mongoDBRepo := repository.NewMongoRepository(mongoDb)
-	svc := service.NewService(mongoDBRepo)
+
+	var tripSvc domain.TripService
+	if dbURL := env.GetString("DATABASE_URL", ""); dbURL != "" {
+		store, err := auth.NewAccountStore(dbURL)
+		if err != nil {
+			log.Printf("warning: account store unavailable (bonus points disabled): %v", err)
+			tripSvc = service.NewService(mongoDBRepo)
+		} else {
+			defer store.Close()
+			tripSvc = service.NewServiceWithBonus(mongoDBRepo, &service.AccountBonusAdapter{Store: store})
+			log.Println("Connected to Postgres for driver bonus points")
+		}
+	} else {
+		tripSvc = service.NewService(mongoDBRepo)
+	}
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -64,7 +84,6 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	// RabbitMQ connection
 	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
 	if err != nil {
 		log.Fatal(err)
@@ -75,21 +94,20 @@ func main() {
 
 	publisher := events.NewTripEventPublisher(rabbitmq)
 
-	// Start driver consumer
-	driverConsumer := events.NewDriverConsumer(rabbitmq, svc)
+	driverConsumer := events.NewDriverConsumer(rabbitmq, tripSvc)
 	go driverConsumer.Listen()
 
-	// Start payment consumer
-	paymentConsumer := events.NewPaymentConsumer(rabbitmq, svc)
+	paymentConsumer := events.NewPaymentConsumer(rabbitmq, tripSvc)
 	go paymentConsumer.Listen()
 
-	// Start lifecycle consumer (en_route → arrived → started → completed → payment)
-	lifecycleConsumer := events.NewLifecycleConsumer(rabbitmq, svc)
+	lifecycleConsumer := events.NewLifecycleConsumer(rabbitmq, tripSvc)
 	go lifecycleConsumer.Listen()
 
-	// Starting the gRPC server
+	otpConsumer := events.NewOTPConsumer(rabbitmq, tripSvc)
+	go otpConsumer.Listen()
+
 	grpcServer := grpcserver.NewServer(tracing.WithTracingInterceptors()...)
-	grpc.NewGRPCHandler(grpcServer, svc, publisher)
+	grpc.NewGRPCHandler(grpcServer, tripSvc, publisher)
 
 	log.Printf("Starting gRPC server Trip service on port %s", lis.Addr().String())
 
@@ -100,8 +118,20 @@ func main() {
 		}
 	}()
 
-	// wait for the shutdown signal
+	httpAddr := env.GetString("HTTP_ADDR", ":8086")
+	mux := http.NewServeMux()
+	httpapi.NewHandler(tripSvc).Mount(mux)
+	httpServer := &http.Server{Addr: httpAddr, Handler: mux}
+	go func() {
+		log.Printf("Starting trip-service HTTP on %s", httpAddr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("trip HTTP error: %v", err)
+			cancel()
+		}
+	}()
+
 	<-ctx.Done()
 	log.Println("Shutting down the server...")
+	_ = httpServer.Shutdown(context.Background())
 	grpcServer.GracefulStop()
 }

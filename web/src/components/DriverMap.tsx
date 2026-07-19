@@ -12,10 +12,11 @@ import * as Geohash from 'ngeohash';
 import { RoutingControl } from "./RoutingControl";
 import { DriverCard } from "./DriverCard";
 import { TripEvents } from "../contracts";
+import { DEFAULT_LOCATION } from "../constants/location";
 
 const START_LOCATION: Coordinate = {
-  latitude: 37.7749,
-  longitude: -122.4194,
+  latitude: DEFAULT_LOCATION.latitude,
+  longitude: DEFAULT_LOCATION.longitude,
 }
 
 const driverMarker = new L.Icon({

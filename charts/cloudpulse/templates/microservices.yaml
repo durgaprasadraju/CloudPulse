@@ -26,11 +26,18 @@ spec:
         - name: {{ $name }}
           image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
           imagePullPolicy: {{ $svc.image.pullPolicy | default "IfNotPresent" }}
-          {{- if $svc.containerPort }}
+          {{- if or $svc.containerPort $svc.httpPort }}
           ports:
+            {{- if $svc.containerPort }}
             - name: grpc
               containerPort: {{ $svc.containerPort }}
               protocol: TCP
+            {{- end }}
+            {{- if $svc.httpPort }}
+            - name: http
+              containerPort: {{ $svc.httpPort }}
+              protocol: TCP
+            {{- end }}
           {{- end }}
           env:
             {{- range $key, $value := $svc.env }}
@@ -54,9 +61,16 @@ metadata:
     app.kubernetes.io/component: {{ $name }}
 spec:
   ports:
+    {{- if $svc.containerPort }}
     - port: {{ $svc.containerPort }}
       targetPort: {{ $svc.containerPort }}
       name: grpc
+    {{- end }}
+    {{- if $svc.httpPort }}
+    - port: {{ $svc.httpPort }}
+      targetPort: {{ $svc.httpPort }}
+      name: http
+    {{- end }}
   selector:
     app.kubernetes.io/component: {{ $name }}
     {{- include "cloudpulse.selectorLabels" $ | nindent 4 }}

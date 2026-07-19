@@ -26,46 +26,6 @@ Publish API: `RabbitMQ.PublishMessage(ctx, routingKey, AmqpMessage)`.
 
 ## 2. Queue → routing key → consumer map
 
-```mermaid
-flowchart LR
-  subgraph Exchange["topic exchange: trip"]
-    E1[trip.event.created]
-    E2[trip.event.driver_not_interested]
-    E3[trip.event.no_drivers_found]
-    E4[trip.event.driver_assigned]
-    C1[driver.cmd.trip_request]
-    C2[driver.cmd.trip_accept / decline]
-    P1[payment.cmd.create_session]
-    P2[payment.event.session_created]
-    P3[payment.event.success]
-  end
-
-  E1 --> Q1[find_available_drivers]
-  E2 --> Q1
-  Q1 --> DS[driver-service]
-
-  C1 --> Q2[driver_cmd_trip_request]
-  Q2 --> GW1[api-gateway → driver WS]
-
-  C2 --> Q3[driver_trip_response]
-  Q3 --> TS1[trip-service]
-
-  E3 --> Q4[notify_driver_no_drivers_found]
-  Q4 --> GW2[api-gateway → rider WS]
-
-  E4 --> Q5[notify_driver_assign]
-  Q5 --> GW3[api-gateway → rider WS]
-
-  P1 --> Q6[payment_trip_response]
-  Q6 --> PS[payment-service]
-
-  P2 --> Q7[notify_payment_session_created]
-  Q7 --> GW4[api-gateway → rider WS]
-
-  P3 --> Q8[payment_success]
-  Q8 --> TS2[trip-service]
-```
-
 | Queue | Bound keys | Consumer |
 |-------|------------|----------|
 | `find_available_drivers` | `trip.event.created`, `trip.event.driver_not_interested` | driver-service |
@@ -73,11 +33,18 @@ flowchart LR
 | `driver_trip_response` | `driver.cmd.trip_accept`, `driver.cmd.trip_decline` | trip-service |
 | `notify_driver_no_drivers_found` | `trip.event.no_drivers_found` | api-gateway → rider WS |
 | `notify_driver_assign` | `trip.event.driver_assigned` | api-gateway → rider WS |
+| `notify_trip_lifecycle` | en_route, arrived, started, completed, cancelled, **otp_issued** | api-gateway → rider WS |
+| `trip_lifecycle_update` | en_route, arrived, started, completed, cancelled | trip-service |
+| `trip_otp_verify` | **`trip.cmd.verify_otp`**, **`trip.cmd.cancel`** | trip-service |
+| `notify_driver_control` | otp_failed, otp_verified, cancelled, started | api-gateway → driver WS |
+| `driver_sim_control` | otp_verified, cancelled, started | driver-service simulator |
 | `payment_trip_response` | `payment.cmd.create_session` | payment-service |
 | `notify_payment_session_created` | `payment.event.session_created` | api-gateway → rider WS |
 | `payment_success` | `payment.event.success` | trip-service |
 
-Declared but unused in bindings today: `payment.event.failed`, `payment.event.cancelled`.
+**OTP start gate:** plaintext OTP is only published on `trip.event.otp_issued` to the rider `ownerId`. The driver starts the trip with `trip.cmd.verify_otp`. Client-originated `trip.event.started` is ignored by trip-service and blocked by api-gateway.
+
+**Payment:** created only after a valid `in_progress → completed` transition. Default provider is PhonePe (`PAYMENT_PROVIDER=phonepe`). Without `PHONEPE_MERCHANT_ID` / `PHONEPE_SALT_KEY`, payment-service mints `pp_test_local_*` sessions and the rider UI uses mock checkout via `POST /payment/mock-success`. Real PhonePe callbacks hit `POST /webhook/phonepe`. After pay, riders may `POST /trips/{id}/review` (bonus points = rating); drivers read aggregates via `GET /drivers/me/dashboard`.
 
 ---
 
@@ -95,7 +62,7 @@ sequenceDiagram
   participant D as driver-service
   participant Dr as Driver Web / local-driver
   participant P as payment-service
-  participant S as Stripe / mock
+  participant S as PhonePe / mock
 
   R->>GW: POST /trip/preview
   GW->>T: gRPC PreviewTrip
@@ -139,12 +106,16 @@ sequenceDiagram
   Q->>GW: notify_payment_session_created
   GW-->>R: WS payment.event.session_created
 
-  R->>S: Pay (Checkout or local redirect)
-  S->>GW: POST /webhook/stripe (real Stripe)
-  Note over GW,T: Local mock skips webhook; UI goes to ?payment=success
+  R->>S: Pay (PhonePe Pay Page or local mock)
+  S->>GW: POST /webhook/phonepe (real PhonePe)
+  Note over GW,T: Local mock uses POST /payment/mock-success (pp_test_local_*)
   GW->>Q: payment.event.success
   Q->>T: payment_success
   T->>M: status=payed
+  R->>GW: POST /trips/{id}/review
+  GW->>T: persist review + bonus points
+  Dr->>GW: GET /drivers/me/dashboard
+  GW->>T: trips + reviews aggregate
 ```
 
 ---
@@ -219,7 +190,12 @@ Note: amount is converted to dollars for the UI (`cents / 100`).
 | `POST /trip/start` | Rider | gRPC `CreateTrip` + publish created |
 | `GET /ws/riders?userID=` | Rider | Subscribe notification queues |
 | `GET /ws/drivers?userID=&packageSlug=` | Driver | Register gRPC + trip request queue |
-| `POST /webhook/stripe` | Stripe | Verify signature → `payment.event.success` |
+| `POST /webhook/stripe` | Stripe | Verify signature → `payment.event.success` (rollback path) |
+| `POST /webhook/phonepe` | PhonePe | Verify checksum → `payment.event.success` |
+| `POST /payment/mock-success` | Rider UI | Accept `pp_test_local_*` / `cs_test_local_*` → success event |
+| `POST /trips/{id}/review` | Rider | Persist rating/comment; award bonus points |
+| `GET /drivers/me/dashboard` | Driver JWT | Trip count, bonus points, avg rating, recent trips/reviews |
+| `GET /drivers/me/trips` | Driver JWT | Completed/payed trips for driver |
 
 Frontend event names mirror routing keys (`web/src/contracts.ts` → `TripEvents`).
 
@@ -231,6 +207,8 @@ Frontend event names mirror routing keys (`web/src/contracts.ts` → `TripEvents
 |------|--------|
 | `LOCAL_SEED_DRIVERS=true` | Registers `local-driver-{sedan,suv,van,luxury}` in memory |
 | `LOCAL_AUTO_ACCEPT=true` | Seeded drivers publish `driver.cmd.trip_accept` immediately |
-| `STRIPE_SECRET_KEY=*replace_me*` | payment-service uses mock sessions `cs_test_local_*` |
+| `PAYMENT_PROVIDER=phonepe` (default) | Prefer PhonePe; use local `pp_test_local_*` when credentials missing |
+| `PHONEPE_MERCHANT_ID` + `PHONEPE_SALT_KEY` empty | payment-service uses PhonePe mock sessions |
+| `PAYMENT_PROVIDER=stripe` + `STRIPE_SECRET_KEY=*replace_me*` | Stripe mock sessions `cs_test_local_*` |
 
 These let a **single rider tab** complete the flow without a second driver browser.
