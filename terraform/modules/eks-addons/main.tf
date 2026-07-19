@@ -23,6 +23,10 @@ terraform {
       source  = "hashicorp/time"
       version = ">= 0.11"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = ">= 3.2"
+    }
   }
 }
 
@@ -163,22 +167,32 @@ resource "time_sleep" "wait_for_argocd_crds" {
   count = var.enable_argocd && var.bootstrap_cloudpulse_app ? 1 : 0
 
   depends_on      = [helm_release.argocd]
-  create_duration = "30s"
+  create_duration = "45s"
 }
 
-# CloudPulse AppProject + Application (GitOps)
-resource "kubernetes_manifest" "argocd_app_project" {
+# Bootstrap AppProject + Application after Argo CD CRDs exist.
+# Use kubectl (not kubernetes_manifest) so plan does not require CRDs upfront.
+resource "null_resource" "argocd_bootstrap" {
   count = var.enable_argocd && var.bootstrap_cloudpulse_app ? 1 : 0
 
-  manifest = yamldecode(file(var.argocd_app_project_manifest))
+  triggers = {
+    project_sha = filesha256(var.argocd_app_project_manifest)
+    app_sha     = filesha256(var.argocd_application_manifest)
+    cluster     = var.cluster_name
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      aws eks update-kubeconfig --name "${var.cluster_name}" --region "${var.aws_region}" --kubeconfig /tmp/cloudpulse-eks.kubeconfig
+      export KUBECONFIG=/tmp/cloudpulse-eks.kubeconfig
+      kubectl wait --for=condition=Established crd/appprojects.argoproj.io --timeout=120s
+      kubectl wait --for=condition=Established crd/applications.argoproj.io --timeout=120s
+      kubectl apply -f "${var.argocd_app_project_manifest}"
+      kubectl apply -f "${var.argocd_application_manifest}"
+    EOT
+  }
 
   depends_on = [time_sleep.wait_for_argocd_crds]
-}
-
-resource "kubernetes_manifest" "argocd_application" {
-  count = var.enable_argocd && var.bootstrap_cloudpulse_app ? 1 : 0
-
-  manifest = yamldecode(file(var.argocd_application_manifest))
-
-  depends_on = [kubernetes_manifest.argocd_app_project]
 }

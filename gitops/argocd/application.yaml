@@ -18,18 +18,16 @@ metadata:
 spec:
   project: cloudpulse
 
-  # Multi-source: Helm chart + external GitOps values file
-  sources:
-    - repoURL: https://github.com/durgaprasadraju/CloudPulse.git
-      targetRevision: main
-      path: charts/cloudpulse
-      helm:
-        releaseName: cloudpulse
-        valueFiles:
-          - $values/gitops/cloudpulse/values-production.yaml
-    - repoURL: https://github.com/durgaprasadraju/CloudPulse.git
-      targetRevision: main
-      ref: values
+  # Single source: chart path + values file relative to the chart directory.
+  # (Multi-source $values refs can make helm run without Chart.yaml in some Argo CD setups.)
+  source:
+    repoURL: https://github.com/durgaprasadraju/CloudPulse.git
+    targetRevision: main
+    path: charts/cloudpulse
+    helm:
+      releaseName: cloudpulse
+      valueFiles:
+        - ../../gitops/cloudpulse/values-production.yaml
 
   destination:
     server: https://kubernetes.default.svc

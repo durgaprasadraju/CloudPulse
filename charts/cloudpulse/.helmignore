@@ -1,9 +1,8 @@
-# Patterns to ignore when packaging /charts/cloudpulse
+# Patterns to ignore when packaging the CloudPulse chart
 .DS_Store
 .git/
 .gitignore
 *.md
-!.helmignore
 *.tgz
 charts/
 tmp/
