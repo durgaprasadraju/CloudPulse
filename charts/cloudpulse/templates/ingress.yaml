@@ -1,0 +1,57 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cloudpulse.fullname" . }}
+  namespace: {{ include "cloudpulse.namespace" . }}
+  labels:
+    {{- include "cloudpulse.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    # api.cloudpulse.live → Go backend (API Gateway)
+    - host: {{ .Values.ingress.hosts.api.host | quote }}
+      http:
+        paths:
+          {{- range .Values.ingress.hosts.api.paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "cloudpulse.backend.fullname" $ }}
+                port:
+                  number: {{ $.Values.backend.service.port }}
+          {{- end }}
+    # cloudpulse.live → React frontend
+    - host: {{ .Values.ingress.hosts.web.host | quote }}
+      http:
+        paths:
+          {{- range .Values.ingress.hosts.web.paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "cloudpulse.frontend.fullname" $ }}
+                port:
+                  number: {{ $.Values.frontend.service.port }}
+          {{- end }}
+    {{- if .Values.ingress.hosts.www.enabled }}
+    # www.cloudpulse.live → React frontend
+    - host: {{ .Values.ingress.hosts.www.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "cloudpulse.frontend.fullname" . }}
+                port:
+                  number: {{ .Values.frontend.service.port }}
+    {{- end }}
+{{- end }}

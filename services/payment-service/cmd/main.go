@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"ride-sharing/services/payment-service/internal/domain"
 	"ride-sharing/services/payment-service/internal/events"
 	"ride-sharing/services/payment-service/internal/infrastructure/stripe"
 	"ride-sharing/services/payment-service/internal/service"
@@ -59,8 +60,12 @@ func main() {
 		return
 	}
 
-	// Stripe processor
-	paymentProcessor := stripe.NewStripeClient(stripeCfg)
+	var paymentProcessor domain.PaymentProcessor
+	if stripe.IsLocalStripeKey(stripeCfg.StripeSecretKey) {
+		paymentProcessor = stripe.NewLocalClient(stripeCfg)
+	} else {
+		paymentProcessor = stripe.NewStripeClient(stripeCfg)
+	}
 
 	// Service
 	svc := service.NewPaymentService(paymentProcessor)

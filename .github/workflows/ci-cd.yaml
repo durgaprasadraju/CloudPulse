@@ -1,0 +1,230 @@
+name: Build, Push Docker Hub & GitOps
+
+# CI builds images → pushes to Docker Hub → updates GitOps values → ArgoCD deploys to EKS.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "shared/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - "web/**"
+      - "charts/cloudpulse/**"
+      - ".github/workflows/ci-cd.yaml"
+  # Note: gitops/values updates are committed by CI and intentionally excluded
+  # so tag bumps do not re-trigger image builds.
+  workflow_dispatch:
+    inputs:
+      force_backend:
+        description: "Force rebuild backend"
+        type: boolean
+        default: true
+      force_frontend:
+        description: "Force rebuild frontend"
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-cd-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  BACKEND_IMAGE: cloudpulse-api-gateway
+  FRONTEND_IMAGE: cloudpulse-web
+  GITOPS_VALUES: gitops/cloudpulse/values-production.yaml
+
+jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'services/**'
+              - 'shared/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+            frontend:
+              - 'web/**'
+
+  build-backend:
+    name: Build & push Go backend
+    needs: changes
+    if: >-
+      needs.changes.outputs.backend == 'true' ||
+      github.event_name == 'workflow_dispatch' && inputs.force_backend
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_repo: ${{ steps.meta.outputs.image_repo }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE }}"
+          echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_repo=${REPO}" >> "$GITHUB_OUTPUT"
+          echo "tags=${REPO}:${SHORT_SHA},${REPO}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            SERVICE=api-gateway
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  build-frontend:
+    name: Build & push React frontend
+    needs: changes
+    if: >-
+      needs.changes.outputs.frontend == 'true' ||
+      github.event_name == 'workflow_dispatch' && inputs.force_frontend
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_repo: ${{ steps.meta.outputs.image_repo }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        run: |
+          SHORT_SHA="${GITHUB_SHA::12}"
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.FRONTEND_IMAGE }}"
+          echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_repo=${REPO}" >> "$GITHUB_OUTPUT"
+          echo "tags=${REPO}:${SHORT_SHA},${REPO}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          file: ./web/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://api.cloudpulse.live
+            NEXT_PUBLIC_WEBSOCKET_URL=wss://api.cloudpulse.live/ws
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${{ secrets.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+  gitops:
+    name: Update GitOps values (ArgoCD)
+    needs: [build-backend, build-frontend]
+    # Run if at least one build succeeded (skip when both were skipped)
+    if: |
+      always() &&
+      (needs.build-backend.result == 'success' || needs.build-frontend.result == 'success') &&
+      (needs.build-backend.result != 'failure' && needs.build-frontend.result != 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Bump image tags in GitOps values
+        env:
+          BACKEND_RESULT: ${{ needs.build-backend.result }}
+          FRONTEND_RESULT: ${{ needs.build-frontend.result }}
+          BACKEND_TAG: ${{ needs.build-backend.outputs.image_tag }}
+          FRONTEND_TAG: ${{ needs.build-frontend.outputs.image_tag }}
+          BACKEND_REPO: ${{ needs.build-backend.outputs.image_repo }}
+          FRONTEND_REPO: ${{ needs.build-frontend.outputs.image_repo }}
+          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          FILE="${{ env.GITOPS_VALUES }}"
+
+          # Ensure Docker Hub username is reflected in repositories
+          yq -i ".backend.image.repository = \"${DOCKERHUB_USER}/${{ env.BACKEND_IMAGE }}\"" "$FILE"
+          yq -i ".frontend.image.repository = \"${DOCKERHUB_USER}/${{ env.FRONTEND_IMAGE }}\"" "$FILE"
+
+          if [ "$BACKEND_RESULT" = "success" ]; then
+            yq -i ".backend.image.tag = \"${BACKEND_TAG}\"" "$FILE"
+            yq -i '.backend.image.pullPolicy = "Always"' "$FILE"
+            echo "Updated backend → ${DOCKERHUB_USER}/${{ env.BACKEND_IMAGE }}:${BACKEND_TAG}"
+          fi
+
+          if [ "$FRONTEND_RESULT" = "success" ]; then
+            yq -i ".frontend.image.tag = \"${FRONTEND_TAG}\"" "$FILE"
+            yq -i '.frontend.image.pullPolicy = "Always"' "$FILE"
+            echo "Updated frontend → ${DOCKERHUB_USER}/${{ env.FRONTEND_IMAGE }}:${FRONTEND_TAG}"
+          fi
+
+          echo "---- ${FILE} ----"
+          cat "$FILE"
+
+      - name: Commit & push GitOps change
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- "${{ env.GITOPS_VALUES }}"; then
+            echo "No GitOps changes to commit"
+            exit 0
+          fi
+
+          git add "${{ env.GITOPS_VALUES }}"
+          git commit -m "chore(gitops): bump CloudPulse image tags to ${GITHUB_SHA::12}
+
+          Triggered by CI after Docker Hub push.
+          ArgoCD will sync this change into the EKS cluster."
+
+          # Retry push in case of concurrent bot commits
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && break
+            sleep 3
+          done

@@ -9,6 +9,7 @@ import (
 	"ride-sharing/shared/env"
 	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/tracing"
+	"ride-sharing/shared/tracking"
 	"syscall"
 
 	grpcserver "google.golang.org/grpc"
@@ -49,6 +50,36 @@ func main() {
 
 	svc := NewService()
 
+	// PostgreSQL (Terraform RDS / local compose) — persistent driver registry
+	if databaseURL := env.GetString("DATABASE_URL", ""); databaseURL != "" {
+		store, err := NewDriverStore(databaseURL)
+		if err != nil {
+			log.Printf("PostgreSQL unavailable, using in-memory drivers only: %v", err)
+		} else {
+			defer store.Close()
+			svc.AttachStore(store)
+			log.Println("Connected to PostgreSQL for driver persistence")
+		}
+	}
+
+	// Redis (Terraform ElastiCache / local compose) — real-time location tracking
+	if redisURL := env.GetString("REDIS_URL", ""); redisURL != "" {
+		locations, err := tracking.NewLocationStore(redisURL)
+		if err != nil {
+			log.Printf("Redis unavailable, location tracking disabled: %v", err)
+		} else {
+			defer locations.Close()
+			svc.AttachLocationStore(locations)
+			log.Println("Connected to Redis for driver location tracking")
+		}
+	}
+
+	autoAccept := env.GetBool("LOCAL_AUTO_ACCEPT", false)
+	if env.GetBool("LOCAL_SEED_DRIVERS", false) {
+		svc.SeedLocalDrivers([]string{"sedan", "suv", "van", "luxury"})
+		log.Println("Seeded local drivers for sedan/suv/van/luxury")
+	}
+
 	// RabbitMQ connection
 	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
 	if err != nil {
@@ -62,7 +93,7 @@ func main() {
 	grpcServer := grpcserver.NewServer(tracing.WithTracingInterceptors()...)
 	NewGrpcHandler(grpcServer, svc)
 
-	consumer := NewTripConsumer(rabbitmq, svc)
+	consumer := NewTripConsumer(rabbitmq, svc, autoAccept)
 	go func() {
 		if err := consumer.Listen(); err != nil {
 			log.Fatalf("Failed to listen to the message: %v", err)

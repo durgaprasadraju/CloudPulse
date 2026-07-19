@@ -12,6 +12,7 @@ import (
 	"ride-sharing/shared/env"
 	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/tracing"
+	"ride-sharing/shared/tracking"
 )
 
 var (
@@ -49,10 +50,23 @@ func main() {
 
 	log.Println("Starting RabbitMQ connection")
 
+	// Redis (Terraform ElastiCache / local compose) — real-time driver tracking
+	var locations *tracking.LocationStore
+	if redisURL := env.GetString("REDIS_URL", ""); redisURL != "" {
+		locations, err = tracking.NewLocationStore(redisURL)
+		if err != nil {
+			log.Printf("Redis unavailable, driver location tracking disabled: %v", err)
+			locations = nil
+		} else {
+			defer locations.Close()
+			log.Println("Connected to Redis for driver location tracking")
+		}
+	}
+
 	mux.Handle("POST /trip/preview", tracing.WrapHandlerFunc(enableCORS(handleTripPreview), "/trip/preview"))
 	mux.Handle("POST /trip/start", tracing.WrapHandlerFunc(enableCORS(handleTripStart), "/trip/start"))
 	mux.Handle("/ws/drivers", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleDriversWebSocket(w, r, rabbitmq)
+		handleDriversWebSocket(w, r, rabbitmq, locations)
 	}, "/ws/drivers"))
 	mux.Handle("/ws/riders", tracing.WrapHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRidersWebSocket(w, r, rabbitmq)

@@ -12,14 +12,16 @@ import (
 )
 
 type tripConsumer struct {
-	rabbitmq *messaging.RabbitMQ
-	service  *Service
+	rabbitmq   *messaging.RabbitMQ
+	service    *Service
+	autoAccept bool
 }
 
-func NewTripConsumer(rabbitmq *messaging.RabbitMQ, service *Service) *tripConsumer {
+func NewTripConsumer(rabbitmq *messaging.RabbitMQ, service *Service, autoAccept bool) *tripConsumer {
 	return &tripConsumer{
-		rabbitmq: rabbitmq,
-		service:  service,
+		rabbitmq:   rabbitmq,
+		service:    service,
+		autoAccept: autoAccept,
 	}
 }
 
@@ -67,10 +69,41 @@ func (c *tripConsumer) handleFindAndNotifyDrivers(ctx context.Context, payload m
 		return nil
 	}
 
-	// Get a random index from the matching drivers
-	randomIndex := rand.Intn(len(suitableIDs))
+	// Prefer a live (browser-connected) driver over a seeded local one when both exist.
+	suitableDriverID := suitableIDs[rand.Intn(len(suitableIDs))]
+	for _, id := range suitableIDs {
+		if !IsLocalSeededDriver(id) {
+			suitableDriverID = id
+			break
+		}
+	}
 
-	suitableDriverID := suitableIDs[randomIndex]
+	driver := c.service.GetDriver(suitableDriverID)
+	if driver == nil {
+		log.Printf("Driver %s not found in memory", suitableDriverID)
+		return nil
+	}
+
+	// Local prototype: auto-accept seeded drivers so a rider-only tab can reach payment.
+	if c.autoAccept && IsLocalSeededDriver(suitableDriverID) {
+		log.Printf("Auto-accepting trip %s for local driver %s", payload.Trip.Id, suitableDriverID)
+		acceptPayload, err := json.Marshal(messaging.DriverTripResponseData{
+			TripID:  payload.Trip.Id,
+			RiderID: payload.Trip.UserID,
+			Driver:  driver,
+		})
+		if err != nil {
+			return err
+		}
+		if err := c.rabbitmq.PublishMessage(ctx, contracts.DriverCmdTripAccept, contracts.AmqpMessage{
+			OwnerID: suitableDriverID,
+			Data:    acceptPayload,
+		}); err != nil {
+			log.Printf("Failed to publish auto-accept: %v", err)
+			return err
+		}
+		return nil
+	}
 
 	marshalledEvent, err := json.Marshal(payload)
 	if err != nil {

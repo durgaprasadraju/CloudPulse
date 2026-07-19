@@ -7,14 +7,33 @@ interface StripePaymentButtonProps {
   isLoading?: boolean
 }
 
-// Initialize Stripe
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+function isLocalPaymentSession(sessionID: string) {
+  return sessionID.startsWith("cs_test_local_")
+}
+
+// Initialize Stripe only when a real publishable key is present
+const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+const stripePromise =
+  publishableKey && !publishableKey.includes("replace_me")
+    ? loadStripe(publishableKey)
+    : null
 
 export const StripePaymentButton = ({
   paymentSession,
   isLoading = false,
 }: StripePaymentButtonProps) => {
   const handlePayment = async () => {
+    // Local prototype: skip Stripe Checkout and mark payment successful
+    if (isLocalPaymentSession(paymentSession.sessionID)) {
+      window.location.href = "/?payment=success"
+      return
+    }
+
+    if (!stripePromise) {
+      console.error("Stripe publishable key is not configured")
+      return
+    }
+
     const stripe = await stripePromise
 
     if (!stripe) {
@@ -22,7 +41,6 @@ export const StripePaymentButton = ({
       return
     }
 
-    // Redirect to Stripe Checkout
     const { error } = await stripe.redirectToCheckout({ sessionId: paymentSession.sessionID })
 
     if (error) {
@@ -30,7 +48,7 @@ export const StripePaymentButton = ({
     }
   }
 
-  if (!process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY) {
+  if (!isLocalPaymentSession(paymentSession.sessionID) && !publishableKey) {
     return (
       <Button
         disabled
@@ -47,7 +65,11 @@ export const StripePaymentButton = ({
       disabled={isLoading}
       className="w-full"
     >
-      {isLoading ? "Loading..." : `Pay ${paymentSession.amount} ${paymentSession.currency}`}
+      {isLoading
+        ? "Loading..."
+        : isLocalPaymentSession(paymentSession.sessionID)
+          ? `Pay ${paymentSession.amount} ${paymentSession.currency} (local)`
+          : `Pay ${paymentSession.amount} ${paymentSession.currency}`}
     </Button>
   )
-} 
+}

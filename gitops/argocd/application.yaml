@@ -1,0 +1,54 @@
+# ArgoCD Application — GitOps deploy of CloudPulse Helm chart to EKS.
+#
+# Bootstrap once (after ArgoCD is installed on the cluster):
+#   kubectl apply -f gitops/argocd/application-project.yaml
+#   kubectl apply -f gitops/argocd/application.yaml
+#
+# CI updates gitops/cloudpulse/values-production.yaml image tags → ArgoCD auto-syncs.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudpulse
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/name: cloudpulse
+spec:
+  project: cloudpulse
+
+  # Multi-source: Helm chart + external GitOps values file
+  sources:
+    - repoURL: https://github.com/durgaprasadraju/CloudPulse.git
+      targetRevision: main
+      path: charts/cloudpulse
+      helm:
+        releaseName: cloudpulse
+        valueFiles:
+          - $values/gitops/cloudpulse/values-production.yaml
+    - repoURL: https://github.com/durgaprasadraju/CloudPulse.git
+      targetRevision: main
+      ref: values
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cloudpulse
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 10

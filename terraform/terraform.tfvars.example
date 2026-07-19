@@ -1,0 +1,33 @@
+# Example values for CloudPulse production. Copy to terraform.tfvars and adjust.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+
+project_name = "cloudpulse"
+environment  = "production"
+aws_region   = "us-east-1"
+
+vpc_cidr = "10.0.0.0/16"
+az_count = 3
+
+kubernetes_version       = "1.30"
+eks_endpoint_public_access = true
+node_instance_types      = ["t3.medium"]
+node_desired_size        = 2
+node_min_size            = 2
+node_max_size            = 4
+
+rds_instance_class      = "db.t3.medium"
+rds_engine_version      = "16"
+rds_db_name             = "cloudpulse"
+rds_multi_az            = true
+rds_deletion_protection = true
+
+redis_node_type                   = "cache.t3.medium"
+redis_engine_version              = "7.1"
+redis_num_cache_clusters          = 2
+redis_transit_encryption_enabled  = false
+
+tags = {
+  Owner = "platform"
+  App   = "CloudPulse.live"
+}

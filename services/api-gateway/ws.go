@@ -8,7 +8,17 @@ import (
 	"ride-sharing/shared/contracts"
 	"ride-sharing/shared/messaging"
 	"ride-sharing/shared/proto/driver"
+	"ride-sharing/shared/tracking"
 )
+
+// driverLocationMessage matches the driver.cmd.location WS payload from the frontend.
+type driverLocationMessage struct {
+	Location struct {
+		Latitude  float64 `json:"latitude"`
+		Longitude float64 `json:"longitude"`
+	} `json:"location"`
+	Geohash string `json:"geohash"`
+}
 
 var (
 	connManager = messaging.NewConnectionManager()
@@ -59,7 +69,7 @@ func handleRidersWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging
 	}
 }
 
-func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ) {
+func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messaging.RabbitMQ, locations *tracking.LocationStore) {
 	conn, err := connManager.Upgrade(w, r)
 	if err != nil {
 		log.Printf("WebSocket upgrade failed: %v", err)
@@ -155,7 +165,21 @@ func handleDriversWebSocket(w http.ResponseWriter, r *http.Request, rb *messagin
 		// Handle the different message type
 		switch driverMsg.Type {
 		case contracts.DriverCmdLocation:
-			// Handle driver location update in the future
+			// Real-time tracking: persist latest driver position in Redis
+			if locations == nil {
+				continue
+			}
+
+			var loc driverLocationMessage
+			if err := json.Unmarshal(driverMsg.Data, &loc); err != nil {
+				log.Printf("Error unmarshaling driver location: %v", err)
+				continue
+			}
+
+			if err := locations.UpdateDriverLocation(ctx, userID,
+				loc.Location.Latitude, loc.Location.Longitude); err != nil {
+				log.Printf("Error updating driver location in Redis: %v", err)
+			}
 			continue
 		case contracts.DriverCmdTripAccept, contracts.DriverCmdTripDecline:
 			// Forward the message to RabbitMQ

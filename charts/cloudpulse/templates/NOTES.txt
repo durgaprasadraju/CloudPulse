@@ -1,0 +1,26 @@
+CHART NAME: {{ .Chart.Name }}
+CHART VERSION: {{ .Chart.Version }}
+APP VERSION: {{ .Chart.AppVersion }}
+
+CloudPulse has been deployed to namespace "{{ include "cloudpulse.namespace" . }}".
+
+Hosts (AWS ALB Ingress):
+  Frontend:  https://{{ .Values.ingress.hosts.web.host }}
+  API:       https://{{ .Values.ingress.hosts.api.host }}
+
+Get the ALB DNS name:
+  kubectl get ingress {{ include "cloudpulse.fullname" . }} -n {{ include "cloudpulse.namespace" . }} \
+    -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{"\n"}'
+
+Point Route 53 (or your DNS) CNAMEs for:
+  - {{ .Values.ingress.hosts.web.host }}
+  - {{ .Values.ingress.hosts.api.host }}
+{{- if .Values.ingress.hosts.www.enabled }}
+  - {{ .Values.ingress.hosts.www.host }}
+{{- end }}
+  at that ALB hostname.
+
+Backend HPA (CPU {{ .Values.backend.hpa.targetCPUUtilizationPercentage }}%):
+  kubectl get hpa -n {{ include "cloudpulse.namespace" . }}
+
+Requires: aws-load-balancer-controller + metrics-server on the cluster.

@@ -1,0 +1,62 @@
+# Production image tags — updated automatically by CI after Docker Hub pushes.
+# ArgoCD watches this file and syncs the Helm release when tags change.
+#
+# Images: <DOCKERHUB_USERNAME>/cloudpulse-api-gateway
+#         <DOCKERHUB_USERNAME>/cloudpulse-web
+#
+# Replace DOCKERHUB_USERNAME below (or let CI rewrite repositories on first run).
+
+backend:
+  image:
+    repository: DOCKERHUB_USERNAME/cloudpulse-api-gateway
+    tag: "latest"
+    pullPolicy: Always
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+
+frontend:
+  image:
+    repository: DOCKERHUB_USERNAME/cloudpulse-web
+    tag: "latest"
+    pullPolicy: Always
+
+  env:
+    NODE_ENV: production
+    NEXT_PUBLIC_API_URL: "https://api.cloudpulse.live"
+    NEXT_PUBLIC_WEBSOCKET_URL: "wss://api.cloudpulse.live/ws"
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    kubernetes.k8s.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/success-codes: "200-399"
+    alb.ingress.kubernetes.io/group.name: cloudpulse
+    # Set your ACM cert ARN after cluster bootstrap:
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT:certificate/UUID
+  hosts:
+    api:
+      host: api.cloudpulse.live
+      paths:
+        - path: /
+          pathType: Prefix
+    web:
+      host: cloudpulse.live
+      paths:
+        - path: /
+          pathType: Prefix
+    www:
+      enabled: true
+      host: www.cloudpulse.live
+
+namespace:
+  create: true
+  name: cloudpulse
