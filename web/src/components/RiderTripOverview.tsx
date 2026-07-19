@@ -191,8 +191,8 @@ export const RiderTripOverview = ({
     return (
       <TripOverviewCard title={title} description={description}>
         <div className="flex flex-col gap-3">
-          <DriverCard driver={assignedDriver} />
           {pickupOTP && <TripOtpCard otp={pickupOTP} driverName={assignedDriver?.name} />}
+          <DriverCard driver={assignedDriver} />
           {canCancelBeforeStart(status) && (
             <Button variant="destructive" className="w-full" onClick={onCancel}>
               Cancel trip

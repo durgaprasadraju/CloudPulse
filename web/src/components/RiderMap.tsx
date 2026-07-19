@@ -233,8 +233,9 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
     }
 
     return (
-        <div className="relative flex flex-col md:flex-row h-screen">
-            <div className={`${destination || trip ? 'flex-[0.7]' : 'flex-1'} relative`}>
+        // 100dvh keeps the bottom panel visible above mobile browser chrome (100vh overflows)
+        <div className="relative flex flex-col md:flex-row h-screen" style={{ height: "100dvh" }}>
+            <div className={`${destination || trip ? 'flex-[0.6] min-h-0' : 'flex-1'} relative`}>
                 <div className="absolute top-3 left-3 z-[1000] flex gap-2">
                     <button
                         className={`rounded-full px-3 py-1.5 text-sm shadow ${settingPickup ? 'bg-blue-600 text-white' : 'bg-white'}`}
@@ -306,7 +307,7 @@ export default function RiderMap({ onRouteSelected }: RiderMapProps) {
                 </MapContainer>
             </div>
 
-            <div className="flex-[0.4] overflow-y-auto">
+            <div className="flex-[0.4] min-h-0 overflow-y-auto">
                 <RiderTripOverview
                     trip={
                         awaitingFeedback && feedbackTripID
