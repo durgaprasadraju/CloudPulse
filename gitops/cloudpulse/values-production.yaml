@@ -89,6 +89,13 @@ microservices:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
       tag: "uber-202607191713"
       pullPolicy: Always
+    # Postgres for driver bonus points (secret created from RDS credentials)
+    extraEnv:
+      - name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: cloudpulse-postgres
+            key: DATABASE_URL
   driver-service:
     enabled: true
     httpPort: 8085
@@ -107,6 +114,13 @@ microservices:
       LOCAL_SIMULATE_TRIPS: "false"
       TRIP_OFFER_TIMEOUT_SEC: "30"
       JAEGER_ENDPOINT: ""
+    # Postgres driver registry (secret created from RDS credentials)
+    extraEnv:
+      - name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: cloudpulse-postgres
+            key: DATABASE_URL
   payment-service:
     enabled: true
     image:
