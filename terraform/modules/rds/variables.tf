@@ -19,9 +19,9 @@ variable "subnet_ids" {
 }
 
 variable "allowed_security_group_ids" {
-  description = "Security groups allowed to connect to PostgreSQL (e.g. EKS nodes)"
-  type        = list(string)
-  default     = []
+  description = "Map of static key → security group ID allowed to connect to PostgreSQL (e.g. EKS nodes). Keys must be known at plan time."
+  type        = map(string)
+  default     = {}
 }
 
 variable "allowed_cidr_blocks" {

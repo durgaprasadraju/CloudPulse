@@ -182,6 +182,115 @@ serviceAccount:
   # annotations:
   #   eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/cloudpulse-app
 
+## ---------------------------------------------------------------------------
+## In-cluster deps (Mongo + RabbitMQ). Postgres/Redis come from Terraform AWS.
+## ---------------------------------------------------------------------------
+mongo:
+  enabled: true
+  image:
+    repository: mongo
+    tag: "7"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+rabbitmq:
+  enabled: true
+  image:
+    repository: rabbitmq
+    tag: "3-management-alpine"
+  user: guest
+  password: guest
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+## ---------------------------------------------------------------------------
+## Go microservices (trip / driver / payment)
+## ---------------------------------------------------------------------------
+microservices:
+  trip-service:
+    enabled: true
+    replicaCount: 1
+    serviceEnabled: true
+    containerPort: 9093
+    image:
+      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
+      tag: "latest"
+      pullPolicy: Always
+    env:
+      ENVIRONMENT: production
+      MONGODB_URI: "mongodb://mongo:27017"
+      RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
+      OSRM_API: "https://router.project-osrm.org"
+      JAEGER_ENDPOINT: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  driver-service:
+    enabled: true
+    replicaCount: 1
+    serviceEnabled: true
+    containerPort: 9092
+    image:
+      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-driver-service
+      tag: "latest"
+      pullPolicy: Always
+    env:
+      ENVIRONMENT: production
+      RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
+      REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
+      LOCAL_SEED_DRIVERS: "true"
+      LOCAL_AUTO_ACCEPT: "true"
+      JAEGER_ENDPOINT: ""
+    # DATABASE_URL injected via --set / values-production from Secrets Manager
+    extraEnv: []
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  payment-service:
+    enabled: true
+    replicaCount: 1
+    serviceEnabled: false
+    containerPort: null
+    image:
+      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-payment-service
+      tag: "latest"
+      pullPolicy: Always
+    env:
+      ENVIRONMENT: production
+      APP_URL: "https://cloudpulse.live"
+      RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
+      STRIPE_SECRET_KEY: "sk_test_local"
+      STRIPE_SUCCESS_URL: "https://cloudpulse.live?payment=success"
+      STRIPE_CANCEL_URL: "https://cloudpulse.live?payment=cancel"
+      JAEGER_ENDPOINT: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
 ## Pod security / scheduling
 podAnnotations: {}
 nodeSelector: {}

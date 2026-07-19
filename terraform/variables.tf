@@ -138,3 +138,36 @@ variable "redis_transit_encryption_enabled" {
   type        = bool
   default     = false
 }
+
+# ---------------------------------------------------------------------------
+# DNS / TLS (Route 53 + ACM)
+# ---------------------------------------------------------------------------
+variable "domain_name" {
+  description = "Apex domain for CloudPulse (Route 53 + ACM)"
+  type        = string
+  default     = "cloudpulse.live"
+}
+
+variable "create_hosted_zone" {
+  description = "Create a new Route 53 public hosted zone for domain_name"
+  type        = bool
+  default     = true
+}
+
+variable "hosted_zone_id" {
+  description = "Existing Route 53 zone ID when create_hosted_zone is false"
+  type        = string
+  default     = ""
+}
+
+variable "alb_dns_name" {
+  description = "ALB DNS name for api/apex/www alias records (set after Ingress creates the ALB)"
+  type        = string
+  default     = ""
+}
+
+variable "alb_zone_id" {
+  description = "Canonical hosted zone ID of the ALB (from AWS console / describe-load-balancers)"
+  type        = string
+  default     = ""
+}

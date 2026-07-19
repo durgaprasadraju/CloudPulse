@@ -57,7 +57,7 @@ resource "aws_security_group_rule" "ingress_cidr" {
 }
 
 resource "aws_security_group_rule" "ingress_sg" {
-  for_each = toset(var.allowed_security_group_ids)
+  for_each = var.allowed_security_group_ids
 
   type                     = "ingress"
   from_port                = 6379
@@ -65,7 +65,7 @@ resource "aws_security_group_rule" "ingress_sg" {
   protocol                 = "tcp"
   source_security_group_id = each.value
   security_group_id        = aws_security_group.this.id
-  description              = "Redis from ${each.value}"
+  description              = "Redis from ${each.key}"
 }
 
 resource "aws_security_group_rule" "egress" {

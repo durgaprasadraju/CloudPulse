@@ -1,0 +1,65 @@
+{{- range $name, $svc := .Values.microservices }}
+{{- if $svc.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "cloudpulse.namespace" $ }}
+  labels:
+    {{- include "cloudpulse.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $svc.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $name }}
+      {{- include "cloudpulse.selectorLabels" $ | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: {{ $name }}
+        {{- include "cloudpulse.selectorLabels" $ | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cloudpulse.serviceAccountName" $ }}
+      containers:
+        - name: {{ $name }}
+          image: "{{ $svc.image.repository }}:{{ $svc.image.tag }}"
+          imagePullPolicy: {{ $svc.image.pullPolicy | default "IfNotPresent" }}
+          {{- if $svc.containerPort }}
+          ports:
+            - name: grpc
+              containerPort: {{ $svc.containerPort }}
+              protocol: TCP
+          {{- end }}
+          env:
+            {{- range $key, $value := $svc.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- with $svc.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml ($svc.resources | default (dict "requests" (dict "cpu" "100m" "memory" "128Mi"))) | nindent 12 }}
+{{- if $svc.serviceEnabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "cloudpulse.namespace" $ }}
+  labels:
+    {{- include "cloudpulse.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  ports:
+    - port: {{ $svc.containerPort }}
+      targetPort: {{ $svc.containerPort }}
+      name: grpc
+  selector:
+    app.kubernetes.io/component: {{ $name }}
+    {{- include "cloudpulse.selectorLabels" $ | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

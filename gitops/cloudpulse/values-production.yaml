@@ -1,25 +1,31 @@
-# Production image tags — updated automatically by CI after Docker Hub pushes.
-# ArgoCD watches this file and syncs the Helm release when tags change.
-#
-# Images: <DOCKERHUB_USERNAME>/cloudpulse-api-gateway
-#         <DOCKERHUB_USERNAME>/cloudpulse-web
-#
-# Replace DOCKERHUB_USERNAME below (or let CI rewrite repositories on first run).
+# EKS production values — images from ECR (same account as the cluster).
+# Apply with:
+#   helm upgrade --install cloudpulse ./charts/cloudpulse -n cloudpulse --create-namespace -f gitops/cloudpulse/values-production.yaml
 
 backend:
+  enabled: true
+  replicaCount: 1
   image:
-    repository: durganadimpalli/cloudpulse-api-gateway
-    tag: "d58ef6e97589"
+    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-api-gateway
+    tag: "latest"
     pullPolicy: Always
   hpa:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 10
-    targetCPUUtilizationPercentage: 70
+    enabled: false
+  env:
+    HTTP_ADDR: ":8080"
+    ENVIRONMENT: production
+    RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
+    TRIP_SERVICE_URL: "trip-service:9093"
+    DRIVER_SERVICE_URL: "driver-service:9092"
+    JAEGER_ENDPOINT: ""
+    REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
+
 frontend:
+  enabled: true
+  replicaCount: 1
   image:
-    repository: durganadimpalli/cloudpulse-web
-    tag: "d58ef6e97589"
+    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-web
+    tag: "latest"
     pullPolicy: Always
   env:
     NODE_ENV: production
@@ -34,10 +40,10 @@ ingress:
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:633193633631:certificate/fd9cf0aa-f118-42d2-85ef-0da534230f5c
     alb.ingress.kubernetes.io/success-codes: "200-399"
     alb.ingress.kubernetes.io/group.name: cloudpulse
-    # Set your ACM cert ARN after cluster bootstrap:
-    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:REGION:ACCOUNT:certificate/UUID
+    alb.ingress.kubernetes.io/tags: Environment=production,Project=cloudpulse
   hosts:
     api:
       host: api.cloudpulse.live
@@ -52,6 +58,40 @@ ingress:
     www:
       enabled: true
       host: www.cloudpulse.live
+
+mongo:
+  enabled: true
+
+rabbitmq:
+  enabled: true
+
+microservices:
+  trip-service:
+    enabled: true
+    image:
+      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
+      tag: "latest"
+      pullPolicy: Always
+  driver-service:
+    enabled: true
+    image:
+      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-driver-service
+      tag: "latest"
+      pullPolicy: Always
+    env:
+      ENVIRONMENT: production
+      RABBITMQ_URI: "amqp://guest:guest@rabbitmq:5672/"
+      REDIS_URL: "redis://cloudpulse-production-redis.t8xdwt.ng.0001.use1.cache.amazonaws.com:6379/0"
+      LOCAL_SEED_DRIVERS: "true"
+      LOCAL_AUTO_ACCEPT: "true"
+      JAEGER_ENDPOINT: ""
+  payment-service:
+    enabled: true
+    image:
+      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-payment-service
+      tag: "latest"
+      pullPolicy: Always
+
 namespace:
   create: true
   name: cloudpulse

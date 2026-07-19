@@ -55,10 +55,11 @@ module "rds" {
 
   # Allow both the custom node SG (launch template) and the EKS primary cluster SG,
   # plus the VPC CIDR as a safe fallback for pod networking edge cases.
-  allowed_security_group_ids = [
-    module.eks.node_security_group_id,
-    module.eks.cluster_primary_security_group_id,
-  ]
+  # Static map keys so for_each works when SG IDs are unknown until apply.
+  allowed_security_group_ids = {
+    eks_nodes           = module.eks.node_security_group_id
+    eks_cluster_primary = module.eks.cluster_primary_security_group_id
+  }
   allowed_cidr_blocks = [module.vpc.vpc_cidr]
 
   instance_class      = var.rds_instance_class
@@ -80,10 +81,11 @@ module "elasticache" {
   vpc_id       = module.vpc.vpc_id
   subnet_ids   = module.vpc.private_subnet_ids
 
-  allowed_security_group_ids = [
-    module.eks.node_security_group_id,
-    module.eks.cluster_primary_security_group_id,
-  ]
+  # Static map keys so for_each works when SG IDs are unknown until apply.
+  allowed_security_group_ids = {
+    eks_nodes           = module.eks.node_security_group_id
+    eks_cluster_primary = module.eks.cluster_primary_security_group_id
+  }
   allowed_cidr_blocks = [module.vpc.vpc_cidr]
 
   node_type                  = var.redis_node_type
@@ -91,4 +93,23 @@ module "elasticache" {
   num_cache_clusters         = var.redis_num_cache_clusters
   transit_encryption_enabled = var.redis_transit_encryption_enabled
   tags                       = local.tags
+}
+
+# ---------------------------------------------------------------------------
+# DNS — Route 53 + ACM for cloudpulse.live / api.cloudpulse.live
+# ---------------------------------------------------------------------------
+module "dns" {
+  source = "./modules/dns"
+
+  domain_name        = var.domain_name
+  create_hosted_zone = var.create_hosted_zone
+  hosted_zone_id     = var.hosted_zone_id
+
+  # Leave empty on first apply. After ALB exists (Ingress), set:
+  #   alb_dns_name = "k8s-....elb.amazonaws.com"
+  #   alb_zone_id  = "Z...."   # ALB's Route 53 hosted zone ID (not your domain zone)
+  alb_dns_name = var.alb_dns_name
+  alb_zone_id  = var.alb_zone_id
+
+  tags = local.tags
 }

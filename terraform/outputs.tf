@@ -79,6 +79,31 @@ output "redis_url" {
   value       = module.elasticache.redis_url
 }
 
+output "domain_name" {
+  description = "Apex domain managed for CloudPulse"
+  value       = module.dns.domain_name
+}
+
+output "route53_zone_id" {
+  description = "Route 53 hosted zone ID"
+  value       = module.dns.hosted_zone_id
+}
+
+output "route53_name_servers" {
+  description = "NS records — point your registrar here if Terraform created the zone"
+  value       = module.dns.name_servers
+}
+
+output "acm_certificate_arn" {
+  description = "Validated ACM certificate ARN for ALB Ingress (api/cloudpulse/www)"
+  value       = module.dns.acm_certificate_arn
+}
+
+output "api_hostname" {
+  description = "API public hostname"
+  value       = module.dns.api_hostname
+}
+
 output "configure_kubectl" {
   description = "Command to configure kubectl for this cluster"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"

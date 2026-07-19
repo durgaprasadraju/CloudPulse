@@ -1,0 +1,53 @@
+{{- if .Values.mongo.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  namespace: {{ include "cloudpulse.namespace" . }}
+  labels:
+    {{- include "cloudpulse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: mongo
+      {{- include "cloudpulse.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: mongo
+        {{- include "cloudpulse.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: mongo
+          image: "{{ .Values.mongo.image.repository }}:{{ .Values.mongo.image.tag }}"
+          ports:
+            - containerPort: 27017
+              name: mongo
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+          resources:
+            {{- toYaml .Values.mongo.resources | nindent 12 }}
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: {{ include "cloudpulse.namespace" . }}
+  labels:
+    {{- include "cloudpulse.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mongo
+spec:
+  ports:
+    - port: 27017
+      targetPort: 27017
+      name: mongo
+  selector:
+    app.kubernetes.io/component: mongo
+    {{- include "cloudpulse.selectorLabels" . | nindent 4 }}
+{{- end }}

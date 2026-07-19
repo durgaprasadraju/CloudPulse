@@ -27,6 +27,13 @@ redis_engine_version              = "7.1"
 redis_num_cache_clusters          = 2
 redis_transit_encryption_enabled  = false
 
+# Route 53 + ACM (api.cloudpulse.live, cloudpulse.live, www.cloudpulse.live)
+domain_name          = "cloudpulse.live"
+create_hosted_zone   = true
+# hosted_zone_id     = "ZXXXXXXXX"   # only if create_hosted_zone = false
+# alb_dns_name       = ""            # set after ALB exists
+# alb_zone_id        = ""
+
 tags = {
   Owner = "platform"
   App   = "CloudPulse.live"
