@@ -3,13 +3,14 @@
 Chronological record of problems encountered while taking CloudPulse from local Docker Compose to production on AWS EKS (GitOps with Argo CD), and how each was fixed.
 
 **Environment:** `cloudpulse-production` (EKS 1.30, us-east-1)  
-**Domains:** `cloudpulse.live`, `www.cloudpulse.live`, `api.cloudpulse.live`  
+**Domains:** `cloudpulse.live`, `www.cloudpulse.live`, `api.cloudpulse.live`, `driver.cloudpulse.live`  
 **Date range:** July 2026
 
 ---
 
 ## Table of contents
 
+### Bootstrap & infra (1–17)
 1. [Local: no drivers assigned after ride select](#1-local-no-drivers-assigned-after-ride-select)
 2. [CI: Node 20 deprecation on GitHub Actions](#2-ci-node-20-deprecation-on-github-actions)
 3. [CI: Docker Hub login failed](#3-ci-docker-hub-login-failed)
@@ -27,6 +28,15 @@ Chronological record of problems encountered while taking CloudPulse from local 
 15. [HTTPS 504: ALB targets unhealthy (security groups)](#15-https-504-alb-targets-unhealthy-security-groups)
 16. [API target unhealthy: no `/health` route](#16-api-target-unhealthy-no-health-route)
 17. [Map WebSocket errors](#17-map-websocket-errors)
+
+### Product / production follow-ups (18–24)
+18. [Terraform hung destroying old ACM certificate](#18-terraform-hung-destroying-old-acm-certificate)
+19. [Gateway error on rider + driver sites (port 3001 SG)](#19-gateway-error-on-rider--driver-sites-port-3001-sg)
+20. [Driver register failed: accounts unavailable](#20-driver-register-failed-accounts-unavailable)
+21. [Pickup OTP missing on mobile (layout)](#21-pickup-otp-missing-on-mobile-layout)
+22. [Pickup OTP missing on web and mobile (stale trip-service)](#22-pickup-otp-missing-on-web-and-mobile-stale-trip-service)
+23. [Terraform: `couldn't find` EKS cluster on fresh account](#23-terraform-couldnt-find-eks-cluster-on-fresh-account)
+24. [Terraform: EKS create aborted by invalid AWS token](#24-terraform-eks-create-aborted-by-invalid-aws-token)
 
 ---
 
@@ -370,24 +380,195 @@ Map UI showed “WebSocket error” while browsing `cloudpulse.live`.
 
 ---
 
-## Quick reference — current healthy shape
+## 18. Terraform hung destroying old ACM certificate
+
+### Issue
+`terraform apply` hung (or never finished) while trying to destroy an old ACM certificate. The new cert (`2bcfcbce-...`) existed, but the ALB HTTPS listener still used the previous cert ARN (`fd9cf0aa-...`).
+
+### Root cause
+ACM certificates cannot be deleted while `InUseBy` an ALB listener. Terraform created a replacement cert (extra SAN for `driver.cloudpulse.live`) but the listener was not updated first, so destroy blocked.
+
+### Fix
+1. Pointed GitOps Ingress annotation at the new ACM ARN in `gitops/cloudpulse/values-production.yaml`.
+2. Updated the ALB HTTPS listener manually:
+   ```bash
+   aws elbv2 modify-listener --listener-arn ... --certificates CertificateArn=<new-arn>
+   ```
+3. Forced Argo CD sync so the Ingress matched.
+4. After the listener stopped referencing the old cert, Terraform could destroy it.
+
+---
+
+## 19. Gateway error on rider + driver sites (port 3001 SG)
+
+### Issue
+`cloudpulse.live` timed out / returned gateway errors; `driver.cloudpulse.live` returned **504**. Driver frontend target group was unhealthy (`Target.Timeout`).
+
+### Root cause
+Earlier SG fix (§15) opened ALB → nodes for ports **3000** and **8080** only. The driver Next.js app listens on **3001**. Node SG had no ingress from the ALB SG on 3001.
+
+### Fix
+Authorized TCP **3001** on the node security group from the ALB security group:
+
+```bash
+aws ec2 authorize-security-group-ingress \
+  --group-id <node-sg> \
+  --protocol tcp --port 3001 \
+  --source-group <alb-sg>
+```
+
+Health checks passed; both frontends returned **200**.
+
+> **Follow-up:** persist 3000 / 3001 / 8080 ALB→node rules in Terraform so recreates do not drop them.
+
+---
+
+## 20. Driver register failed: accounts unavailable
+
+### Issue
+Driver frontend registration returned **503** with message along the lines of “accounts unavailable”.
+
+### Root cause
+`driver-service` (and `trip-service` for bonus points) never received `DATABASE_URL` in production. Without Postgres, `auth.AccountStore` did not initialize, so register/login could not work.
+
+### Fix
+1. Built `DATABASE_URL` from Terraform RDS output + Secrets Manager credentials.
+2. Created Kubernetes secret `cloudpulse-postgres` in namespace `cloudpulse` with key `DATABASE_URL`.
+3. Added `extraEnv` in `gitops/cloudpulse/values-production.yaml` for `driver-service` and `trip-service` referencing that secret.
+4. Argo synced; new pods connected to RDS. Registration succeeded.
+
+---
+
+## 21. Pickup OTP missing on mobile (layout)
+
+### Issue
+On mobile browsers the pickup OTP was not visible; on desktop it appeared.
+
+### Root cause
+1. Rider map used `h-screen` (**100vh**), which on mobile overflows past the visible area when browser chrome is present, pushing the bottom panel off-screen.
+2. `TripOtpCard` was rendered **below** `DriverCard` inside the constrained panel, so OTP sat below the fold.
+
+### Fix
+- Reordered OTP above the driver card in `web/src/components/RiderTripOverview.tsx`.
+- Set main layout height to **`100dvh`** (with `h-screen` fallback) and `min-h-0` on flex children in `web/src/components/RiderMap.tsx`.
+
+Commit: `cd3cf88`.
+
+---
+
+## 22. Pickup OTP missing on web and mobile (stale trip-service)
+
+### Issue
+After the layout fix, riders still saw **no OTP at all** on desktop or mobile during an active trip.
+
+### Root cause
+OTP issuance lives in **trip-service** (commit `84b8b1f` / related OTP consumers). Production GitOps still pinned:
+
+```yaml
+microservices.trip-service.image:
+  repository: ...ecr.../cloudpulse-trip-service
+  tag: "uber-202607191713"   # pre-OTP image
+```
+
+CI only built and bumped **api-gateway**, **driver-service**, and frontends — **not** `trip-service` or `payment-service`. The running trip-service never issued `trip.event.otp_issued`.
+
+### Fix
+1. Extended `.github/workflows/ci-cd.yaml` to build/push `cloudpulse-trip-service` and `cloudpulse-payment-service` to Docker Hub on every backend change.
+2. GitOps job now bumps tags for gateway + driver + trip + payment together.
+3. CI run on `71a3eac` published images and bumped values to tag `71a3eac030ed`.
+4. Argo CD automated sync pulls the OTP-capable trip-service.
+
+After sync, start a **new** trip (existing in-flight trips may not have an OTP stored).
+
+---
+
+## 23. Terraform: `couldn't find` EKS cluster on fresh account
+
+### Issue
+On a new AWS account / empty local state:
+
+```
+Error: reading EKS Cluster (cloudpulse-production): couldn't find resource
+
+  with data.aws_eks_cluster.this,
+  on provider.tf line 60
+```
+
+Plan also showed **72 to add** (full stack recreate). Account identity was `860366539592` (not the previous production account).
+
+### Root cause
+`provider.tf` always evaluates:
+
+```hcl
+data "aws_eks_cluster" "this" {
+  name = module.eks.cluster_name
+}
+```
+
+for Kubernetes/Helm providers. On a brand-new apply the cluster does not exist yet, so the data source fails during plan/apply even though `module.eks` is about to create it. Stale `alb_dns_name` / disabled add-ons from the old cluster also did not belong on a greenfield run.
+
+### Fix (bootstrap sequence)
+1. Clear stale state if intentionally rebuilding: remove local `terraform.tfstate` / `.terraform` only when the old AWS account/resources are gone.
+2. Reset `terraform.tfvars` for greenfield:
+   - `alb_dns_name = ""` / `alb_zone_id = ""`
+   - `enable_metrics_server = true`
+   - `enable_aws_load_balancer_controller = true`
+3. Create VPC + EKS first (so the data source can resolve):
+
+   ```bash
+   terraform apply -target=module.vpc -target=module.eks
+   ```
+
+4. Then full `terraform apply` for RDS, Redis, DNS, Argo CD / ALB controller.
+
+Comment in `provider.tf` already documents this two-step bootstrap.
+
+---
+
+## 24. Terraform: EKS create aborted by invalid AWS token
+
+### Issue
+During targeted EKS create (~10+ minutes in):
+
+```
+Error: waiting for EKS Cluster (cloudpulse-production) create:
+... UnrecognizedClientException: The security token included in the request is invalid.
+```
+
+### Root cause
+AWS credentials expired or were rotated mid-apply (sandbox/session token invalid). Cluster create was interrupted mid-flight.
+
+### Fix
+1. Refresh valid AWS credentials (`aws sts get-caller-identity` must succeed).
+2. Inspect whether a partial cluster exists: `aws eks describe-cluster --name cloudpulse-production`.
+3. Re-run the same targeted apply (or `terraform apply` once credentials are stable). Long creates need credentials that last the full wait (EKS often 10–20 minutes).
+
+---
+
+## Quick reference — healthy production shape (prior account)
 
 | Layer | Status after fixes |
 |-------|--------------------|
-| EKS nodes | Ready (2×) |
-| Argo CD | Running; Application Synced |
-| Frontend | Running; ALB TG healthy |
-| API gateway | Running; `/health` → 200; ALB TG healthy |
-| trip / driver / payment | Images on ECR; pods Running |
+| EKS nodes | Ready |
+| Argo CD | Running; Application Synced / self-heal |
+| Rider frontend | Running; ALB TG healthy (port 3000) |
+| Driver frontend | Running; ALB TG healthy (port 3001) |
+| API gateway | Running; `/health` → 200; ALB TG healthy (8080) |
+| trip / driver / payment | Docker Hub images; tags bumped by CI |
 | Mongo / RabbitMQ | Running in-cluster |
-| DNS | Alias → ALB for apex / api / www |
-| TLS | ACM cert on ALB |
-| WebSocket | `wss://api.cloudpulse.live/ws/...` upgrades OK |
+| Postgres / Redis | RDS + ElastiCache; `DATABASE_URL` via K8s secret |
+| DNS | Alias → ALB for apex / api / www / driver |
+| TLS | ACM cert on ALB (includes `driver.` SAN) |
+| WebSocket | `wss://api.cloudpulse.live/ws/...`; ALB idle timeout 3600s |
+| OTP | Issued by trip-service after accept; shown on rider UI |
 
 **URLs**
 
-- App: https://cloudpulse.live  
+- Rider: https://cloudpulse.live  
+- Driver: https://driver.cloudpulse.live  
 - API: https://api.cloudpulse.live  
+
+> **Note:** Rebuilding into a **new AWS account** resets the above until §§23–24 bootstrap and post-apply wiring (kubeconfig, postgres secret, Redis URL in GitOps, ALB aliases, ACM) are completed again.
 
 ---
 
@@ -402,3 +583,5 @@ Map UI showed “WebSocket error” while browsing `cloudpulse.live`.
 | GitOps values | `gitops/cloudpulse/values-production.yaml` |
 | Argo Application | `gitops/argocd/application.yaml` |
 | CI | `.github/workflows/ci-cd.yaml` |
+| Rider OTP UI | `web/src/components/RiderTripOverview.tsx`, `RiderMap.tsx` |
+| OTP / trip events | `services/trip-service/`, `shared/contracts/amqp.go` |
