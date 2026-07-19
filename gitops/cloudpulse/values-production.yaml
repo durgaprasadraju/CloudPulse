@@ -6,8 +6,8 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    repository: durganadimpalli/cloudpulse-api-gateway
-    tag: "4d84f98431a6"
+    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-api-gateway
+    tag: "health-1784457608"
     pullPolicy: Always
   hpa:
     enabled: false
@@ -66,13 +66,13 @@ microservices:
     enabled: true
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
-      tag: "latest"
+      tag: "34072bac8d49"
       pullPolicy: Always
   driver-service:
     enabled: true
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-driver-service
-      tag: "latest"
+      tag: "34072bac8d49"
       pullPolicy: Always
     env:
       ENVIRONMENT: production
@@ -85,7 +85,7 @@ microservices:
     enabled: true
     image:
       repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-payment-service
-      tag: "latest"
+      tag: "34072bac8d49"
       pullPolicy: Always
 namespace:
   create: true

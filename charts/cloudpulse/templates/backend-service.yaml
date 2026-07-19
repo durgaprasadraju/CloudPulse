@@ -7,6 +7,9 @@ metadata:
   labels:
     {{- include "cloudpulse.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
+  annotations:
+    # ALB health check: api-gateway serves 200 on /health (no root route)
+    alb.ingress.kubernetes.io/healthcheck-path: /health
 spec:
   type: {{ .Values.backend.service.type }}
   ports:
