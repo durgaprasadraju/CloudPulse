@@ -27,7 +27,7 @@ frontend:
   replicaCount: 1
   image:
     repository: durganadimpalli/cloudpulse-web
-    tag: "84b8b1f8f35d"
+    tag: "cd3cf884f58d"
     pullPolicy: Always
   env:
     NODE_ENV: production
