@@ -9,6 +9,7 @@ Provisions the AWS production foundation for **CloudPulse.live**:
 | `modules/rds` | PostgreSQL (Multi-AZ) in private subnets; credentials in **Secrets Manager** |
 | `modules/elasticache` | Redis replication group in private subnets |
 | `modules/dns` | Route 53 hosted zone + ACM cert for `cloudpulse.live`, `api.cloudpulse.live`, `www.cloudpulse.live` |
+| `modules/eks-addons` | **Helm** installs: metrics-server, AWS Load Balancer Controller (IRSA), **Argo CD**, plus CloudPulse AppProject/Application |
 
 Private subnets route `0.0.0.0/0` through the NAT Gateway so EKS nodes can pull images and call AWS APIs without public IPs. RDS/Redis allow ingress from the EKS node SG, cluster primary SG, and VPC CIDR.
 
@@ -17,7 +18,8 @@ Private subnets route `0.0.0.0/0` through the NAT Gateway so EKS nodes can pull 
 - Terraform `>= 1.5`
 - AWS credentials with permissions for VPC, EKS, IAM, RDS, ElastiCache, Route 53, ACM
 - Domain `cloudpulse.live` (or set `domain_name`) — if Terraform creates the hosted zone, point the registrar NS to `route53_name_servers`
-- `aws` CLI (for `kubectl` config after apply)
+- `aws` CLI + `kubectl` (for Argo CD password / port-forward)
+- Helm charts are installed **by Terraform** (you do not need to run `helm` manually)
 
 ## Usage
 
@@ -30,11 +32,45 @@ terraform plan
 terraform apply
 ```
 
+If this is the **first** cluster create, apply EKS before add-ons:
+
+```bash
+terraform apply -target=module.vpc -target=module.eks
+terraform apply
+```
+
+### If ALB Controller was installed manually earlier
+
+Either let Terraform take over the Helm release, or uninstall the CLI install first:
+
+```bash
+helm uninstall aws-load-balancer-controller -n kube-system
+# optional: delete the old IAM role created by hand
+terraform apply
+```
+
+If metrics-server was installed with raw YAML (not Helm), set in `terraform.tfvars`:
+
+```hcl
+enable_metrics_server = false
+```
+
 Configure kubectl:
 
 ```bash
 terraform output -raw configure_kubectl | bash
 ```
+
+### Argo CD UI
+
+```bash
+terraform output -raw argocd_port_forward | bash
+# password:
+terraform output -raw argocd_admin_password_cmd | bash
+# login: admin / <password>  →  https://localhost:8080
+```
+
+Argo CD syncs `gitops/argocd/application.yaml` → Helm chart `charts/cloudpulse` + `gitops/cloudpulse/values-production.yaml`.
 
 ## DNS / TLS
 
@@ -45,13 +81,9 @@ After apply:
    terraform output route53_name_servers
    ```
    ACM validation waits until those NS are live.
-2. Put the cert on the ALB Ingress:
+2. Put the cert on the ALB Ingress (also set in GitOps values):
    ```bash
    terraform output -raw acm_certificate_arn
-   ```
-   Set in `gitops/cloudpulse/values-production.yaml`:
-   ```yaml
-   alb.ingress.kubernetes.io/certificate-arn: <arn>
    ```
 3. After AWS Load Balancer Controller creates the ALB, create alias records by setting in `terraform.tfvars`:
    ```hcl
@@ -66,6 +98,7 @@ After apply, use these outputs when creating IAM roles for Kubernetes service ac
 
 - `eks_oidc_provider_arn`
 - `eks_oidc_provider_url`
+- `alb_controller_role_arn` (Load Balancer Controller)
 
 Example trust principal:  
 `system:serviceaccount:<namespace>:<service-account-name>`

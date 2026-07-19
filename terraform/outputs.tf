@@ -104,6 +104,21 @@ output "api_hostname" {
   value       = module.dns.api_hostname
 }
 
+output "alb_controller_role_arn" {
+  description = "IAM role used by AWS Load Balancer Controller (IRSA)"
+  value       = module.eks_addons.alb_controller_role_arn
+}
+
+output "argocd_port_forward" {
+  description = "Open Argo CD UI"
+  value       = module.eks_addons.argocd_server_port_forward
+}
+
+output "argocd_admin_password_cmd" {
+  description = "Read initial Argo CD admin password"
+  value       = module.eks_addons.argocd_initial_admin_password_cmd
+}
+
 output "configure_kubectl" {
   description = "Command to configure kubectl for this cluster"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"

@@ -14,6 +14,18 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.5"
     }
+    helm = {
+      source  = "hashicorp/helm"
+      version = "~> 2.12"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.25"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
 
   # Uncomment and configure for remote state in a shared team environment.
@@ -35,5 +47,30 @@ provider "aws" {
       Environment = var.environment
       ManagedBy   = "terraform"
     }
+  }
+}
+
+# Kubernetes / Helm talk to the EKS API using short-lived tokens.
+# On a brand-new cluster, run: terraform apply -target=module.eks
+# then a full apply so these providers can authenticate.
+data "aws_eks_cluster" "this" {
+  name = module.eks.cluster_name
+}
+
+data "aws_eks_cluster_auth" "this" {
+  name = module.eks.cluster_name
+}
+
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.this.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.this.token
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = data.aws_eks_cluster.this.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+    token                  = data.aws_eks_cluster_auth.this.token
   }
 }

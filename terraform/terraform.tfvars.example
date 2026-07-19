@@ -34,6 +34,13 @@ create_hosted_zone   = true
 # alb_dns_name       = ""            # set after ALB exists
 # alb_zone_id        = ""
 
+# EKS add-ons (Helm charts managed by Terraform)
+enable_metrics_server               = false # already installed on this cluster
+enable_aws_load_balancer_controller = true
+enable_argocd                       = true
+bootstrap_cloudpulse_app            = true
+argocd_server_service_type          = "ClusterIP"
+
 tags = {
   Owner = "platform"
   App   = "CloudPulse.live"

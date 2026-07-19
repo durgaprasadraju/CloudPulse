@@ -171,3 +171,36 @@ variable "alb_zone_id" {
   type        = string
   default     = ""
 }
+
+# ---------------------------------------------------------------------------
+# EKS add-ons (Helm via Terraform)
+# ---------------------------------------------------------------------------
+variable "enable_metrics_server" {
+  description = "Install metrics-server Helm chart (needed for HPA). Set false if already installed outside Terraform."
+  type        = bool
+  default     = true
+}
+
+variable "enable_aws_load_balancer_controller" {
+  description = "Install AWS Load Balancer Controller via Helm + IRSA"
+  type        = bool
+  default     = true
+}
+
+variable "enable_argocd" {
+  description = "Install Argo CD via Helm"
+  type        = bool
+  default     = true
+}
+
+variable "bootstrap_cloudpulse_app" {
+  description = "Apply gitops/argocd AppProject + Application after Argo CD is ready"
+  type        = bool
+  default     = true
+}
+
+variable "argocd_server_service_type" {
+  description = "Argo CD server Service type (ClusterIP + port-forward, or LoadBalancer)"
+  type        = string
+  default     = "ClusterIP"
+}

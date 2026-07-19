@@ -113,3 +113,29 @@ module "dns" {
 
   tags = local.tags
 }
+
+# ---------------------------------------------------------------------------
+# EKS add-ons — Helm installs (ALB Controller, metrics-server, Argo CD)
+# ---------------------------------------------------------------------------
+module "eks_addons" {
+  source = "./modules/eks-addons"
+
+  aws_region        = var.aws_region
+  cluster_name      = module.eks.cluster_name
+  vpc_id            = module.vpc.vpc_id
+  oidc_provider_arn = module.eks.oidc_provider_arn
+  oidc_provider_url = module.eks.oidc_provider_url
+
+  enable_metrics_server               = var.enable_metrics_server
+  enable_aws_load_balancer_controller = var.enable_aws_load_balancer_controller
+  enable_argocd                       = var.enable_argocd
+  bootstrap_cloudpulse_app            = var.bootstrap_cloudpulse_app
+  argocd_server_service_type          = var.argocd_server_service_type
+
+  argocd_app_project_manifest = "${path.module}/../gitops/argocd/application-project.yaml"
+  argocd_application_manifest = "${path.module}/../gitops/argocd/application.yaml"
+
+  tags = local.tags
+
+  depends_on = [module.eks]
+}
