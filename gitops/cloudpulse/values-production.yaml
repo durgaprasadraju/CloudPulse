@@ -8,27 +8,23 @@
 
 backend:
   image:
-    repository: DOCKERHUB_USERNAME/cloudpulse-api-gateway
-    tag: "latest"
+    repository: durganadimpalli/cloudpulse-api-gateway
+    tag: "d58ef6e97589"
     pullPolicy: Always
-
   hpa:
     enabled: true
     minReplicas: 2
     maxReplicas: 10
     targetCPUUtilizationPercentage: 70
-
 frontend:
   image:
-    repository: DOCKERHUB_USERNAME/cloudpulse-web
-    tag: "latest"
+    repository: durganadimpalli/cloudpulse-web
+    tag: "d58ef6e97589"
     pullPolicy: Always
-
   env:
     NODE_ENV: production
     NEXT_PUBLIC_API_URL: "https://api.cloudpulse.live"
     NEXT_PUBLIC_WEBSOCKET_URL: "wss://api.cloudpulse.live/ws"
-
 ingress:
   enabled: true
   className: alb
@@ -56,7 +52,6 @@ ingress:
     www:
       enabled: true
       host: www.cloudpulse.live
-
 namespace:
   create: true
   name: cloudpulse
