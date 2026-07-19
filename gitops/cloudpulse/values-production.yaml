@@ -6,8 +6,8 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-api-gateway
-    tag: "uber-202607191713"
+    repository: durganadimpalli/cloudpulse-api-gateway
+    tag: "fb55a99a630d"
     pullPolicy: Always
   hpa:
     enabled: false
@@ -23,8 +23,8 @@ frontend:
   enabled: true
   replicaCount: 1
   image:
-    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-web
-    tag: "uber-202607191713"
+    repository: durganadimpalli/cloudpulse-web
+    tag: "fb55a99a630d"
     pullPolicy: Always
   env:
     NODE_ENV: production
