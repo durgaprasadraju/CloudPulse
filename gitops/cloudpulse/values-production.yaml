@@ -6,8 +6,8 @@ backend:
   enabled: true
   replicaCount: 1
   image:
-    repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-api-gateway
-    tag: "health-1784457608"
+    repository: durganadimpalli/cloudpulse-api-gateway
+    tag: "06346a5ac8b3"
     pullPolicy: Always
   hpa:
     enabled: false
