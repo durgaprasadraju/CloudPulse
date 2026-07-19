@@ -53,7 +53,7 @@ ingress:
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
-    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:633193633631:certificate/fd9cf0aa-f118-42d2-85ef-0da534230f5c
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:633193633631:certificate/2bcfcbce-2048-4124-8993-c3c1519c221c
     alb.ingress.kubernetes.io/success-codes: "200-399"
     # Keep WebSocket connections alive (default 60s idle timeout drops the map's WS)
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=3600
