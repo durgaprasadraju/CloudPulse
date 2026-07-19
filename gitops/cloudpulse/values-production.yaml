@@ -7,7 +7,7 @@ backend:
   replicaCount: 1
   image:
     repository: durganadimpalli/cloudpulse-api-gateway
-    tag: "84b8b1f8f35d"
+    tag: "71a3eac030ed"
     pullPolicy: Always
   hpa:
     enabled: false
@@ -86,8 +86,8 @@ microservices:
   trip-service:
     enabled: true
     image:
-      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-trip-service
-      tag: "uber-202607191713"
+      repository: durganadimpalli/cloudpulse-trip-service
+      tag: "71a3eac030ed"
       pullPolicy: Always
     # Postgres for driver bonus points (secret created from RDS credentials)
     extraEnv:
@@ -101,7 +101,7 @@ microservices:
     httpPort: 8085
     image:
       repository: durganadimpalli/cloudpulse-driver-service
-      tag: "84b8b1f8f35d"
+      tag: "71a3eac030ed"
       pullPolicy: Always
     env:
       ENVIRONMENT: production
@@ -124,8 +124,8 @@ microservices:
   payment-service:
     enabled: true
     image:
-      repository: 633193633631.dkr.ecr.us-east-1.amazonaws.com/cloudpulse-payment-service
-      tag: "34072bac8d49"
+      repository: durganadimpalli/cloudpulse-payment-service
+      tag: "71a3eac030ed"
       pullPolicy: Always
 namespace:
   create: true
