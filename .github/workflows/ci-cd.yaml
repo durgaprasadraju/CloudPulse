@@ -44,6 +44,8 @@ env:
   FRONTEND_IMAGE: cloudpulse-web
   DRIVER_FRONTEND_IMAGE: cloudpulse-web-driver
   DRIVER_SERVICE_IMAGE: cloudpulse-driver-service
+  TRIP_SERVICE_IMAGE: cloudpulse-trip-service
+  PAYMENT_SERVICE_IMAGE: cloudpulse-payment-service
   GITOPS_VALUES: gitops/cloudpulse/values-production.yaml
 
 jobs:
@@ -66,13 +68,14 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - 'Dockerfile'
+              - '.github/workflows/ci-cd.yaml'
             frontend:
               - 'web/**'
             driver_frontend:
               - 'web-driver/**'
 
   build-backend:
-    name: Build & push Go backend + driver-service
+    name: Build & push Go backend + microservices
     needs: changes
     if: >-
       needs.changes.outputs.backend == 'true' ||
@@ -101,11 +104,15 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::12}"
           REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.BACKEND_IMAGE }}"
           DRIVER_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DRIVER_SERVICE_IMAGE }}"
+          TRIP_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.TRIP_SERVICE_IMAGE }}"
+          PAYMENT_REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ env.PAYMENT_SERVICE_IMAGE }}"
           echo "version=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
           echo "image_repo=${REPO}" >> "$GITHUB_OUTPUT"
           echo "driver_image_repo=${DRIVER_REPO}" >> "$GITHUB_OUTPUT"
           echo "tags=${REPO}:${SHORT_SHA},${REPO}:latest" >> "$GITHUB_OUTPUT"
           echo "driver_tags=${DRIVER_REPO}:${SHORT_SHA},${DRIVER_REPO}:latest" >> "$GITHUB_OUTPUT"
+          echo "trip_tags=${TRIP_REPO}:${SHORT_SHA},${TRIP_REPO}:latest" >> "$GITHUB_OUTPUT"
+          echo "payment_tags=${PAYMENT_REPO}:${SHORT_SHA},${PAYMENT_REPO}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push API gateway
         uses: docker/build-push-action@v7
@@ -129,6 +136,32 @@ jobs:
           build-args: |
             SERVICE=driver-service
           tags: ${{ steps.meta.outputs.driver_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Build and push trip-service
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            SERVICE=trip-service
+          tags: ${{ steps.meta.outputs.trip_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Build and push payment-service
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            SERVICE=payment-service
+          tags: ${{ steps.meta.outputs.payment_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -266,10 +299,12 @@ jobs:
           if [ "$BACKEND_RESULT" = "success" ]; then
             yq -i ".backend.image.tag = \"${BACKEND_TAG}\"" "$FILE"
             yq -i '.backend.image.pullPolicy = "Always"' "$FILE"
-            yq -i ".microservices.driver-service.image.repository = \"${DOCKERHUB_USER}/${{ env.DRIVER_SERVICE_IMAGE }}\"" "$FILE"
-            yq -i ".microservices.driver-service.image.tag = \"${BACKEND_TAG}\"" "$FILE"
-            yq -i '.microservices.driver-service.image.pullPolicy = "Always"' "$FILE"
-            echo "Updated backend + driver-service → ${BACKEND_TAG}"
+            for svc in driver-service trip-service payment-service; do
+              yq -i ".microservices.${svc}.image.repository = \"${DOCKERHUB_USER}/cloudpulse-${svc}\"" "$FILE"
+              yq -i ".microservices.${svc}.image.tag = \"${BACKEND_TAG}\"" "$FILE"
+              yq -i ".microservices.${svc}.image.pullPolicy = \"Always\"" "$FILE"
+            done
+            echo "Updated backend + driver/trip/payment services → ${BACKEND_TAG}"
           fi
 
           if [ "$FRONTEND_RESULT" = "success" ]; then
